@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.exceptions import AppException, app_exception_handler
+from app.routes.auth import router as auth_router
 
 # ── Create application ─────────────────────────────────────
 app = FastAPI(
@@ -31,6 +32,9 @@ app.add_middleware(
 
 # ── Register error handlers ───────────────────────────────
 app.add_exception_handler(AppException, app_exception_handler)
+
+# ── Register routers ──────────────────────────────────────
+app.include_router(auth_router)
 
 
 # ── Health check ───────────────────────────────────────────
