@@ -17,3 +17,8 @@ run:
   env:
     - name: PYTHONUNBUFFERED
       value: "1"
+  secrets:
+    - name: DATABASE_URL
+      value-from: "arn:aws:secretsmanager:us-east-1:541804384060:secret:prod/app/credentials-9LHYXc:DATABASE_URL"
+    - name: JWT_SECRET
+      value-from: "arn:aws:secretsmanager:us-east-1:541804384060:secret:prod/app/credentials-9LHYXc:JWT_SECRET"
