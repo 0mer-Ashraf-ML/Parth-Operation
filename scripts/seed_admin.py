@@ -23,7 +23,7 @@ from app.services.auth import hash_password
 # ── Configuration ──────────────────────────────────────────
 ADMIN_EMAIL = "admin@gmail.com"
 ADMIN_PASSWORD = "admin123"
-ADMIN_NAME = "Platform Admin"
+ADMIN_NAME = "System Admin"
 
 
 def main() -> None:
