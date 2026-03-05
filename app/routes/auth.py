@@ -59,6 +59,8 @@ def _build_token_and_response(db: Session, user: User) -> dict:
         role=user.role.value,
         client_ids=client_ids,
         vendor_id=vendor_id,
+        email=user.email,
+        full_name=user.full_name,
     )
 
     return {
@@ -158,5 +160,7 @@ def me(current_user: CurrentUser = Depends(get_current_user)):
             "role": current_user.role.value,
             "client_ids": current_user.client_ids,
             "vendor_id": current_user.vendor_id,
+            "email": current_user.email,
+            "full_name": current_user.full_name,
         },
     }

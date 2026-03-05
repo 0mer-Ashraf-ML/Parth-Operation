@@ -33,6 +33,8 @@ def create_access_token(
     role: str,
     client_ids: list[int] | None = None,
     vendor_id: int | None = None,
+    email: str = "",
+    full_name: str = "",
 ) -> str:
     """
     Build a signed JWT containing the user's identity and permissions.
@@ -42,6 +44,8 @@ def create_access_token(
         role       – admin | account_manager | vendor
         client_ids – list of accessible client PKs (Account Managers only)
         vendor_id  – linked vendor PK (Vendors only)
+        email      – user email
+        full_name  – user full name
         exp        – expiration timestamp
         iat        – issued-at timestamp
     """
@@ -51,6 +55,8 @@ def create_access_token(
         "role": role,
         "client_ids": client_ids or [],
         "vendor_id": vendor_id,
+        "email": email,
+        "full_name": full_name,
         "exp": now + timedelta(minutes=settings.JWT_EXPIRATION_MINUTES),
         "iat": now,
     }

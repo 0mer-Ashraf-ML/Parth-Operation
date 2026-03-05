@@ -51,3 +51,5 @@ class CurrentUser(BaseModel):
     role: UserRole
     client_ids: list[int] = []
     vendor_id: int | None = None
+    email: str = ""
+    full_name: str = ""
