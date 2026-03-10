@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.exceptions import AppException, app_exception_handler
 from app.routes.auth import router as auth_router
+from app.routes.clients import router as clients_router
+from app.routes.vendors import router as vendors_router
+from app.routes.skus import router as skus_router
 
 # ── Create application ─────────────────────────────────────
 app = FastAPI(
@@ -35,6 +38,9 @@ app.add_exception_handler(AppException, app_exception_handler)
 
 # ── Register routers ──────────────────────────────────────
 app.include_router(auth_router)
+app.include_router(clients_router)
+app.include_router(vendors_router)
+app.include_router(skus_router)
 
 
 # ── Health check ───────────────────────────────────────────
