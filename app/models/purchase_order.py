@@ -12,17 +12,26 @@ order by vendor and creates one PO per vendor.
 Vendors log in and only see their own POs.  They move the status
 through a fixed flow depending on shipment type.
 
+All shipment/delivery tracking lives here – NOT on the Sales Order.
+  • expected_ship_date    – when vendor expects to ship goods
+  • expected_arrival_date – when goods arrive at warehouse or client (drop-ship)
+Both are updated by the vendor so the business always knows the schedule.
+
 POLine
 ──────
 Each row maps back to one SO line.  This lets us trace every PO item
 directly to the customer order that triggered it.
+Per-line dates allow tracking when individual SKUs within a PO have
+different due dates or expected shipment schedules.
 """
 
+import datetime as _dt
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
+    Date,
     DateTime,
     Enum as SAEnum,
     ForeignKey,
@@ -65,6 +74,16 @@ class PurchaseOrder(Base, TimestampMixin):
         default=POStatus.IN_PRODUCTION,
     )
 
+    # ── Date fields (updated by vendor) ───────────────────
+    expected_ship_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="When vendor expects to ship goods (updated by vendor)",
+    )
+    expected_arrival_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="When goods are expected to arrive at warehouse or client (updated by vendor)",
+    )
+
     # ── Relationships ──────────────────────────────────────
     sales_order: Mapped["SalesOrder"] = relationship(
         "SalesOrder", back_populates="purchase_orders",
@@ -86,6 +105,9 @@ class PurchaseOrder(Base, TimestampMixin):
 class POLine(Base):
     """
     One item on a Purchase Order, linking back to the originating SO line.
+
+    Per-line dates allow granular tracking when each SKU in an order
+    has a different due date or expected shipment schedule.
     """
 
     __tablename__ = "po_lines"
@@ -103,6 +125,21 @@ class POLine(Base):
         ForeignKey("skus.id"), nullable=False,
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # ── Per-line date fields ──────────────────────────────
+    due_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Per-line due date (inherited from the originating SO line)",
+    )
+    expected_ship_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Per-line expected ship date (vendor can update individually)",
+    )
+    expected_arrival_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Per-line expected arrival date (vendor can update individually)",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

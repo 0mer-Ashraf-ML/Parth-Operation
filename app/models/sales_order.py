@@ -8,22 +8,31 @@ else: Purchase Orders, fulfillment, invoicing, and payments all tie
 back to the original SO.
 
 • order_number  – pulled from the customer's PDF where possible.
+• order_date    – date the customer placed the order (from their PO).
+• due_date      – overall due date for the entire Sales Order.
 • status        – ALWAYS derived from its lines, never set manually.
                   Pending → Partial Delivered → Delivered.
+
+NOTE: All shipment/delivery tracking lives on the Purchase Orders.
+      The only tracking done through Sales Orders is invoice-related
+      (what has been invoiced and receivables still to collect).
 
 SOLine
 ──────
 Each row is one SKU on the order.  Tracks:
   ordered_qty   – how many the customer wants
   unit_price    – locked at SO creation from the tier pricing table
+  due_date      – per-line due date (each SKU can have a different due date)
   delivered_qty – running total from fulfillment events
   invoiced_qty  – running total from invoice lines (Milestone 2)
 """
 
+import datetime as _dt
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
+    Date,
     Enum as SAEnum,
     ForeignKey,
     Integer,
@@ -64,6 +73,17 @@ class SalesOrder(Base, TimestampMixin):
         default=SOStatus.PENDING,
         index=True,
     )
+
+    # ── Date fields ───────────────────────────────────────
+    order_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Date the customer placed the order (from their PO)",
+    )
+    due_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Overall due date for the entire Sales Order",
+    )
+
     original_pdf_url: Mapped[Optional[str]] = mapped_column(String(500))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[int] = mapped_column(
@@ -113,6 +133,13 @@ class SOLine(Base, TimestampMixin):
         Numeric(18, 2), nullable=False,
         comment="Locked at SO creation from tier pricing – never changes",
     )
+
+    # ── Per-line due date ─────────────────────────────────
+    due_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date, nullable=True,
+        comment="Per-line-item due date (from customer PO – each SKU can have a different due date)",
+    )
+
     delivered_qty: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False,
         comment="Sum of all fulfillment events for this line",

@@ -14,6 +14,7 @@ from app.routes.auth import router as auth_router
 from app.routes.clients import router as clients_router
 from app.routes.vendors import router as vendors_router
 from app.routes.skus import router as skus_router
+from app.routes.sales_orders import router as sales_orders_router
 
 # ── Create application ─────────────────────────────────────
 app = FastAPI(
@@ -41,6 +42,7 @@ app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(vendors_router)
 app.include_router(skus_router)
+app.include_router(sales_orders_router)
 
 
 # ── Health check ───────────────────────────────────────────
