@@ -15,6 +15,8 @@ from app.routes.clients import router as clients_router
 from app.routes.vendors import router as vendors_router
 from app.routes.skus import router as skus_router
 from app.routes.sales_orders import router as sales_orders_router
+from app.routes.purchase_orders import router as purchase_orders_router
+from app.routes.purchase_orders import generate_router as po_generate_router
 
 # ── Create application ─────────────────────────────────────
 app = FastAPI(
@@ -43,6 +45,8 @@ app.include_router(clients_router)
 app.include_router(vendors_router)
 app.include_router(skus_router)
 app.include_router(sales_orders_router)
+app.include_router(purchase_orders_router)
+app.include_router(po_generate_router)
 
 
 # ── Health check ───────────────────────────────────────────
