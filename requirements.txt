@@ -19,3 +19,9 @@ bcrypt==3.2.2
 
 # ── File Uploads ───────────────────────────────────────────
 python-multipart==0.0.20
+
+# ── AWS S3 (document storage) ─────────────────────────────
+boto3==1.37.3
+
+# ── Google Gemini AI (PDF parsing) ────────────────────────
+google-generativeai==0.8.5
