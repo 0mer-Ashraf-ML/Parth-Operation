@@ -272,6 +272,7 @@ def _sku_to_detail(sku) -> SKUDetailOut:
         name=sku.name,
         description=sku.description,
         default_vendor_id=sku.default_vendor_id,
+        secondary_vendor_id=sku.secondary_vendor_id,
         track_inventory=sku.track_inventory,
         inventory_count=sku.inventory_count,
         is_active=sku.is_active,

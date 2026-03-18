@@ -74,6 +74,7 @@ def create_vendor(db: Session, data: VendorCreate) -> Vendor:
         contact_name=data.contact_name,
         email=data.email,
         phone=data.phone,
+        lead_time_weeks=data.lead_time_weeks,
     )
     db.add(vendor)
     db.commit()

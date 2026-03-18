@@ -54,6 +54,10 @@ class SKU(Base, TimestampMixin):
     default_vendor_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("vendors.id"), nullable=True,
     )
+    secondary_vendor_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("vendors.id"), nullable=True,
+        comment="Backup vendor used when default vendor cannot fulfil",
+    )
     track_inventory: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False,
         comment="Enable running inventory count for stocked SKUs",
@@ -67,6 +71,9 @@ class SKU(Base, TimestampMixin):
     # ── Relationships ──────────────────────────────────────
     default_vendor: Mapped[Optional["Vendor"]] = relationship(
         "Vendor", foreign_keys=[default_vendor_id],
+    )
+    secondary_vendor: Mapped[Optional["Vendor"]] = relationship(
+        "Vendor", foreign_keys=[secondary_vendor_id],
     )
     sku_vendors: Mapped[list["SKUVendor"]] = relationship(
         "SKUVendor", back_populates="sku", cascade="all, delete-orphan",

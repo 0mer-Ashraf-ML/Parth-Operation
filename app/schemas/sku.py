@@ -66,6 +66,9 @@ class SKUCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, examples=["BOND BAR ASM U 10IN ATT"])
     description: Optional[str] = None
     default_vendor_id: Optional[int] = None
+    secondary_vendor_id: Optional[int] = Field(
+        None, description="Backup vendor when default vendor cannot fulfil",
+    )
     track_inventory: bool = False
     inventory_count: int = Field(0, ge=0)
     # Nested – create tier prices together with the SKU
@@ -78,6 +81,7 @@ class SKUUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
     default_vendor_id: Optional[int] = None
+    secondary_vendor_id: Optional[int] = None
     track_inventory: Optional[bool] = None
     inventory_count: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
@@ -89,6 +93,7 @@ class SKUListOut(BaseModel):
     sku_code: str
     name: str
     default_vendor_id: Optional[int] = None
+    secondary_vendor_id: Optional[int] = None
     track_inventory: bool
     inventory_count: int
     is_active: bool
@@ -104,6 +109,7 @@ class SKUDetailOut(BaseModel):
     name: str
     description: Optional[str] = None
     default_vendor_id: Optional[int] = None
+    secondary_vendor_id: Optional[int] = None
     track_inventory: bool
     inventory_count: int
     is_active: bool

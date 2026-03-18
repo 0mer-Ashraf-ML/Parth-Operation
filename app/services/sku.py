@@ -94,11 +94,22 @@ def create_sku(db: Session, data: SKUCreate) -> SKU:
         if vendor is None:
             raise BadRequestException(f"Vendor with id={data.default_vendor_id} not found")
 
+    # Validate secondary vendor exists
+    if data.secondary_vendor_id is not None:
+        sec_vendor = db.execute(
+            select(Vendor).where(Vendor.id == data.secondary_vendor_id)
+        ).scalar_one_or_none()
+        if sec_vendor is None:
+            raise BadRequestException(f"Vendor with id={data.secondary_vendor_id} not found")
+        if data.secondary_vendor_id == data.default_vendor_id:
+            raise BadRequestException("Secondary vendor cannot be the same as the default vendor")
+
     sku = SKU(
         sku_code=data.sku_code,
         name=data.name,
         description=data.description,
         default_vendor_id=data.default_vendor_id,
+        secondary_vendor_id=data.secondary_vendor_id,
         track_inventory=data.track_inventory,
         inventory_count=data.inventory_count,
     )
@@ -142,6 +153,20 @@ def update_sku(db: Session, sku_id: int, data: SKUUpdate) -> SKU:
             raise BadRequestException(
                 f"Vendor with id={update_data['default_vendor_id']} not found"
             )
+
+    # Validate secondary vendor if changing
+    if "secondary_vendor_id" in update_data and update_data["secondary_vendor_id"] is not None:
+        sec_vendor = db.execute(
+            select(Vendor).where(Vendor.id == update_data["secondary_vendor_id"])
+        ).scalar_one_or_none()
+        if sec_vendor is None:
+            raise BadRequestException(
+                f"Vendor with id={update_data['secondary_vendor_id']} not found"
+            )
+        # Check not same as default
+        effective_default = update_data.get("default_vendor_id", sku.default_vendor_id)
+        if update_data["secondary_vendor_id"] == effective_default:
+            raise BadRequestException("Secondary vendor cannot be the same as the default vendor")
 
     for field, value in update_data.items():
         setattr(sku, field, value)

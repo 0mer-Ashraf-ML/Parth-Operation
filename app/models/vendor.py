@@ -7,7 +7,7 @@ They cannot see client details, invoices, pricing, or other vendors' data.
 
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -26,6 +26,10 @@ class Vendor(Base, TimestampMixin):
     contact_name: Mapped[Optional[str]] = mapped_column(String(255))
     email: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
+    lead_time_weeks: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None,
+        comment="Typical manufacturing/delivery lead time in weeks",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # ── Relationships ──────────────────────────────────────

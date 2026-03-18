@@ -14,6 +14,11 @@ class VendorCreate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=255)
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
+    lead_time_weeks: Optional[int] = Field(
+        None, ge=0, le=104,
+        description="Typical manufacturing/delivery lead time in weeks",
+        examples=[4],
+    )
 
 
 class VendorUpdate(BaseModel):
@@ -22,6 +27,7 @@ class VendorUpdate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=255)
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
+    lead_time_weeks: Optional[int] = Field(None, ge=0, le=104)
     is_active: Optional[bool] = None
 
 
@@ -31,6 +37,7 @@ class VendorListOut(BaseModel):
     contact_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    lead_time_weeks: Optional[int] = None
     is_active: bool
     created_at: datetime
 
@@ -43,6 +50,7 @@ class VendorDetailOut(BaseModel):
     contact_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    lead_time_weeks: Optional[int] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
