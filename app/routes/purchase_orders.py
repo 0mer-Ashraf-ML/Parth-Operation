@@ -1,6 +1,9 @@
 """
 Purchase Order routes – PO auto-generation, CRUD, and line management.
 
+PO lines now carry ALL delivery tracking: per-line status,
+delivered_qty, remaining_qty, plus schedule dates.
+
 Permission matrix:
     Action              │ Admin │ AM          │ Vendor
     ────────────────────┼───────┼─────────────┼───────
@@ -161,7 +164,7 @@ def delete_purchase_order(
 
 @router.patch(
     "/{po_id}/lines/{line_id}",
-    summary="Update PO line dates (vendor schedule tracking)",
+    summary="Update PO line (status, dates – vendor schedule tracking)",
 )
 def update_po_line(
     po_id: int,
@@ -187,6 +190,7 @@ def _po_to_list_item(po) -> dict:
     """Build lightweight list-item representation of a PO."""
     line_count = len(po.lines) if po.lines else 0
     total_quantity = sum(ln.quantity for ln in po.lines) if po.lines else 0
+    total_delivered = sum(ln.delivered_qty for ln in po.lines) if po.lines else 0
 
     return POListOut(
         id=po.id,
@@ -205,6 +209,7 @@ def _po_to_list_item(po) -> dict:
         expected_arrival_date=po.expected_arrival_date,
         line_count=line_count,
         total_quantity=total_quantity,
+        total_delivered=total_delivered,
         created_at=po.created_at,
     ).model_dump()
 
@@ -237,13 +242,17 @@ def _po_to_detail(po) -> dict:
 
 
 def _line_to_out(line) -> dict:
-    """Build response representation of a single PO line."""
+    """Build response representation of a single PO line (with delivery data)."""
     return POLineOut(
         id=line.id,
         purchase_order_id=line.purchase_order_id,
         so_line_id=line.so_line_id,
         sku_id=line.sku_id,
         quantity=line.quantity,
+        status=line.status,
+        delivered_qty=line.delivered_qty,
+        remaining_qty=line.remaining_qty,
+        is_fully_delivered=line.delivered_qty >= line.quantity,
         due_date=line.due_date,
         expected_ship_date=line.expected_ship_date,
         expected_arrival_date=line.expected_arrival_date,

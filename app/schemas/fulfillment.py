@@ -1,5 +1,8 @@
 """
-Pydantic schemas for Fulfillment Event endpoints.
+Pydantic schemas for Fulfillment Event endpoints (PO-line-centric).
+
+All delivery tracking lives on the PO side.  Fulfillment events are
+recorded against PO lines, not SO lines.
 
 Naming convention:
   • *Create  – POST request body
@@ -14,7 +17,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import EventSource
+from app.models.enums import EventSource, POLineStatus
 
 
 # ═══════════════════════════════════════════════════════════
@@ -23,17 +26,12 @@ from app.models.enums import EventSource
 
 class FulfillmentEventCreate(BaseModel):
     """
-    POST /fulfillment-events body.
+    POST /fulfillment/events body.
 
-    Records a delivery of goods against a specific SO line.
-    Optionally links to a PO line for full traceability.
+    Records a delivery of goods against a specific PO line.
     """
-    so_line_id: int = Field(
-        ..., description="The SO line that these goods are being delivered against",
-    )
-    po_line_id: Optional[int] = Field(
-        None,
-        description="Optional PO line link – for traceability (which PO shipment delivered this)",
+    po_line_id: int = Field(
+        ..., description="The PO line that these goods are being delivered against",
     )
     quantity: int = Field(
         ..., gt=0,
@@ -54,8 +52,7 @@ class FulfillmentEventCreate(BaseModel):
 class FulfillmentEventOut(BaseModel):
     """Response representation of a single fulfillment event."""
     id: int
-    so_line_id: int
-    po_line_id: Optional[int] = None
+    po_line_id: int
     quantity: int
     recorded_by: int
     recorder_name: Optional[str] = None
@@ -66,23 +63,26 @@ class FulfillmentEventOut(BaseModel):
     # Denormalized context for readability
     sku_code: Optional[str] = None
     sku_name: Optional[str] = None
-    so_order_number: Optional[str] = None
-    so_line_number: Optional[int] = None
     po_number: Optional[str] = None
+    so_order_number: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
 
-class FulfillmentSummaryOut(BaseModel):
+# ═══════════════════════════════════════════════════════════
+#  PO LINE FULFILLMENT SUMMARY
+# ═══════════════════════════════════════════════════════════
+
+class POLineFulfillmentSummary(BaseModel):
     """
-    Aggregated fulfillment summary for a single SO line.
-    Used in SO detail views to show delivery progress at a glance.
+    Aggregated fulfillment summary for a single PO line.
+    Shows delivery progress at a glance.
     """
-    so_line_id: int
+    po_line_id: int
     sku_code: Optional[str] = None
     sku_name: Optional[str] = None
-    line_number: int
-    ordered_qty: int
+    status: POLineStatus
+    quantity: int
     delivered_qty: int
     remaining_qty: int
     is_fully_delivered: bool
@@ -92,14 +92,16 @@ class FulfillmentSummaryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class SOFulfillmentOverview(BaseModel):
+class POFulfillmentOverview(BaseModel):
     """
-    Full fulfillment overview for a Sales Order.
+    Full fulfillment overview for a Purchase Order.
     Shows each line's delivery progress and all events.
     """
-    sales_order_id: int
-    order_number: str
+    purchase_order_id: int
+    po_number: str
     status: str
-    lines: list[FulfillmentSummaryOut] = []
+    vendor_name: Optional[str] = None
+    so_order_number: Optional[str] = None
+    lines: list[POLineFulfillmentSummary] = []
 
     model_config = {"from_attributes": True}

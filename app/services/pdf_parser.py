@@ -71,6 +71,12 @@ IMPORTANT RULES:
 8. If the document contains a "Bill To" or "Invoice To" address, extract it into bill_to_address.
 9. Payment terms might appear as "Net 30", "Net 45", "Due on Receipt", etc.
 10. The customer's PO number is OUR sales order number - extract it carefully.
+11. CRITICAL: SKU codes / part numbers / item codes must NEVER contain internal spaces or line breaks.
+    PDF table columns are often narrow, causing text to wrap to a new line mid-value.
+    You MUST rejoin any wrapped text into one continuous string.
+    Example: if a cell shows "PO-SKU-A1-21002" on one line and "1" on the next, the sku_code is "PO-SKU-A1-210021" (no space).
+    Similarly "FUL-SKU-V2-2200" + "48" = "FUL-SKU-V2-220048".
+    The same rule applies to the order_number field — remove any accidental internal spaces or line breaks.
 
 Return ONLY a valid JSON object with this EXACT structure (no markdown, no code fences, no explanation):
 
@@ -227,7 +233,7 @@ def _match_skus(
         sku_list.append(sku)
 
     for item in line_items:
-        code = (item.get("sku_code") or "").strip().lower()
+        code = _normalize_code(item.get("sku_code") or "").lower()
         if not code:
             item["matched_sku_id"] = None
             item["matched_sku_name"] = None
@@ -310,6 +316,24 @@ def _match_client(
 #  SAFE TYPE CONVERTERS
 # ═══════════════════════════════════════════════════════════
 
+def _normalize_code(val: Optional[str]) -> Optional[str]:
+    """
+    Remove accidental internal whitespace / line-breaks from SKU codes
+    and order numbers.  PDF table columns are narrow, so Gemini sometimes
+    inserts spaces when text wraps inside a cell.
+
+    Examples:
+        "PO-SKU-A1-21002 1" → "PO-SKU-A1-210021"
+        "FUL-SKU-V2-2200 48" → "FUL-SKU-V2-220048"
+        "TEST-SKU-SEC-00 0"  → "TEST-SKU-SEC-000"
+        "80-203099-A"        → "80-203099-A"  (unchanged)
+    """
+    if not val:
+        return val
+    # Collapse ALL inner whitespace (spaces, newlines, tabs)
+    return "".join(val.split())
+
+
 def _safe_decimal(val) -> Optional[Decimal]:
     """Convert a value to Decimal, return None on failure."""
     if val is None:
@@ -370,7 +394,7 @@ def build_parse_result(
 
         line_items.append({
             "line_number": item.get("line_number", i + 1),
-            "sku_code": item.get("sku_code"),
+            "sku_code": _normalize_code(item.get("sku_code")),
             "sku_description": item.get("sku_description"),
             "quantity": qty,
             "unit_price": _safe_decimal(item.get("unit_price")),
@@ -421,7 +445,7 @@ def build_parse_result(
         s3_url=s3_url,
         presigned_url=presigned_url,
         original_filename=original_filename,
-        order_number=parsed_data.get("order_number"),
+        order_number=_normalize_code(parsed_data.get("order_number")),
         order_date=_safe_date(parsed_data.get("order_date")),
         due_date=_safe_date(parsed_data.get("due_date")),
         customer_name=customer_name,

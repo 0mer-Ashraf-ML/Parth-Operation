@@ -10,12 +10,12 @@ back to the original SO.
 • order_number  – pulled from the customer's PDF where possible.
 • order_date    – date the customer placed the order (from their PO).
 • due_date      – overall due date for the entire Sales Order.
-• status        – ALWAYS derived from its lines, never set manually.
-                  Pending → Partial Delivered → Delivered.
+• status        – tracks INVOICING progress only.
+                  Pending → Partial Invoiced → Fully Invoiced (M2).
 
-NOTE: All shipment/delivery tracking lives on the Purchase Orders.
-      The only tracking done through Sales Orders is invoice-related
-      (what has been invoiced and receivables still to collect).
+NOTE: All shipment/delivery tracking lives on Purchase Order lines.
+      Sales Orders track ONLY invoicing: what has been invoiced,
+      what hasn't, and outstanding receivables.
 
 SOLine
 ──────
@@ -23,7 +23,6 @@ Each row is one SKU on the order.  Tracks:
   ordered_qty   – how many the customer wants
   unit_price    – locked at SO creation from the tier pricing table
   due_date      – per-line due date (each SKU can have a different due date)
-  delivered_qty – running total from fulfillment events
   invoiced_qty  – running total from invoice lines (Milestone 2)
 """
 
@@ -48,7 +47,6 @@ from app.models.enums import SOStatus
 
 if TYPE_CHECKING:
     from app.models.client import Client, ClientAddress
-    from app.models.fulfillment import FulfillmentEvent
     from app.models.purchase_order import PurchaseOrder
     from app.models.sku import SKU
     from app.models.user import User
@@ -140,10 +138,9 @@ class SOLine(Base, TimestampMixin):
         comment="Per-line-item due date (from customer PO – each SKU can have a different due date)",
     )
 
-    delivered_qty: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False,
-        comment="Sum of all fulfillment events for this line",
-    )
+    # NOTE: delivered_qty is NO LONGER on SOLine.
+    #       ALL delivery tracking lives on PO lines (POLine.delivered_qty).
+
     invoiced_qty: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False,
         comment="Sum of all invoice line quantities (Milestone 2)",
@@ -154,23 +151,14 @@ class SOLine(Base, TimestampMixin):
         "SalesOrder", back_populates="lines",
     )
     sku: Mapped["SKU"] = relationship("SKU")
-    fulfillment_events: Mapped[list["FulfillmentEvent"]] = relationship(
-        "FulfillmentEvent", back_populates="so_line",
-    )
 
     @property
-    def remaining_qty(self) -> int:
-        """Units not yet delivered."""
-        return self.ordered_qty - self.delivered_qty
-
-    @property
-    def invoiceable_qty(self) -> int:
-        """Units delivered but not yet invoiced."""
-        return self.delivered_qty - self.invoiced_qty
+    def uninvoiced_qty(self) -> int:
+        """Units not yet invoiced (for receivables tracking)."""
+        return self.ordered_qty - self.invoiced_qty
 
     def __repr__(self) -> str:
         return (
             f"<SOLine id={self.id} so={self.sales_order_id} "
-            f"sku={self.sku_id} ordered={self.ordered_qty} "
-            f"delivered={self.delivered_qty}>"
+            f"sku={self.sku_id} ordered={self.ordered_qty}>"
         )

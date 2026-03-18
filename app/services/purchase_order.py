@@ -25,7 +25,7 @@ from app.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
-from app.models.enums import POStatus, ShipmentType, UserRole
+from app.models.enums import POLineStatus, POStatus, ShipmentType, UserRole
 from app.models.purchase_order import POLine, PurchaseOrder
 from app.models.sales_order import SOLine, SalesOrder
 from app.models.sku import SKU, SKUVendor
@@ -300,7 +300,13 @@ def update_po_line(
     line_id: int,
     **kwargs,
 ) -> POLine:
-    """Update per-line dates on a PO line (vendor schedule tracking)."""
+    """
+    Update per-line fields on a PO line (status, dates).
+
+    Per-line status follows the same flow as PO-level status:
+      Drop-ship: IN_PRODUCTION → PACKED_AND_SHIPPED → DELIVERED
+      In-house:  IN_PRODUCTION → PACKED_AND_SHIPPED → READY_FOR_PICKUP → DELIVERED
+    """
     po = get_purchase_order(db, current_user, po_id)
 
     line = db.execute(
@@ -314,6 +320,15 @@ def update_po_line(
         raise NotFoundException(
             f"PO Line id={line_id} not found on PO {po.po_number}"
         )
+
+    # ── Per-line status transition ────────────────────────
+    if "status" in kwargs and kwargs["status"] is not None:
+        new_status = kwargs["status"]
+        if new_status != line.status:
+            _validate_line_status_transition(
+                po.shipment_type, line.status, new_status,
+            )
+            line.status = new_status
 
     if "due_date" in kwargs:
         line.due_date = kwargs["due_date"]
@@ -405,6 +420,37 @@ def _validate_status_transition(
         raise BadRequestException(
             f"Invalid status transition for {flow} flow: "
             f"'{current_status.value}' → '{new_status.value}'. "
+            f"Valid next: [{valid_str}]"
+        )
+
+
+# ── Valid LINE-level status transitions (mirrors PO-level) ──
+_VALID_LINE_TRANSITIONS: dict[tuple[ShipmentType, POLineStatus], list[POLineStatus]] = {
+    # Drop-ship flow
+    (ShipmentType.DROP_SHIP, POLineStatus.IN_PRODUCTION): [POLineStatus.PACKED_AND_SHIPPED],
+    (ShipmentType.DROP_SHIP, POLineStatus.PACKED_AND_SHIPPED): [POLineStatus.DELIVERED],
+    # In-house flow
+    (ShipmentType.IN_HOUSE, POLineStatus.IN_PRODUCTION): [POLineStatus.PACKED_AND_SHIPPED],
+    (ShipmentType.IN_HOUSE, POLineStatus.PACKED_AND_SHIPPED): [POLineStatus.READY_FOR_PICKUP],
+    (ShipmentType.IN_HOUSE, POLineStatus.READY_FOR_PICKUP): [POLineStatus.DELIVERED],
+}
+
+
+def _validate_line_status_transition(
+    shipment_type: ShipmentType,
+    current_status: POLineStatus,
+    new_status: POLineStatus,
+) -> None:
+    """Validate that the requested PO line status transition is allowed."""
+    key = (shipment_type, current_status)
+    valid_next = _VALID_LINE_TRANSITIONS.get(key, [])
+
+    if new_status not in valid_next:
+        flow = "Drop-Ship" if shipment_type == ShipmentType.DROP_SHIP else "In-House"
+        valid_str = ", ".join(s.value for s in valid_next) if valid_next else "none (terminal state)"
+        raise BadRequestException(
+            f"Invalid line status transition for {flow} flow: "
+            f"'{current_status.value}' -> '{new_status.value}'. "
             f"Valid next: [{valid_str}]"
         )
 

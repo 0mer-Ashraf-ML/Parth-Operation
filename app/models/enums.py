@@ -24,11 +24,32 @@ class ContactType(str, enum.Enum):
 
 class SOStatus(str, enum.Enum):
     """
-    Sales Order status – always *derived* from its line items,
-    never set manually.
+    Sales Order status – tracks INVOICING only (not delivery).
+
+    Delivery tracking lives entirely on Purchase Orders / PO Lines.
+
+    M1 values (DB-compatible):
+      • PENDING           – default; no invoicing yet
+      • PARTIAL_DELIVERED  – legacy name; will be replaced in M2
+      • DELIVERED          – legacy name; will be replaced in M2
+
+    M2 will add: PARTIAL_INVOICED, FULLY_INVOICED via migration.
     """
     PENDING = "pending"
-    PARTIAL_DELIVERED = "partial_delivered"
+    PARTIAL_DELIVERED = "partial_delivered"  # Legacy – kept for DB compat
+    DELIVERED = "delivered"                  # Legacy – kept for DB compat
+
+
+class POLineStatus(str, enum.Enum):
+    """
+    Per-line status on a Purchase Order line item.
+    Each PO line tracks its own delivery progress independently.
+    Drop-ship: IN_PRODUCTION → PACKED_AND_SHIPPED → DELIVERED
+    In-house:  IN_PRODUCTION → PACKED_AND_SHIPPED → READY_FOR_PICKUP → DELIVERED
+    """
+    IN_PRODUCTION = "in_production"
+    PACKED_AND_SHIPPED = "packed_and_shipped"
+    READY_FOR_PICKUP = "ready_for_pickup"  # in-house only
     DELIVERED = "delivered"
 
 

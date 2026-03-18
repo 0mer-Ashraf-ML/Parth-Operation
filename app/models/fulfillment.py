@@ -1,20 +1,22 @@
 """
-FulfillmentEvent model – append-only delivery log.
+FulfillmentEvent model – append-only delivery log (PO-line-centric).
 
-Every time goods are delivered against an SO line, a new row is
+Every time goods are delivered against a PO line, a new row is
 inserted.  These rows are NEVER edited or deleted — they form a
 permanent, auditable history of every delivery event.
 
-The deliveredQty on the SO line is the SUM of all fulfillment events
+The delivered_qty on the PO line is the SUM of all fulfillment events
 for that line.
 
 Fields:
-  • so_line_id   – which SO line this delivery applies to
-  • po_line_id   – optional link to the PO line (for traceability)
+  • po_line_id   – which PO line this delivery applies to (REQUIRED)
   • quantity     – how many units arrived in this event
   • recorded_by  – which user recorded the delivery
   • source       – whether it was recorded via UI or AI chat
   • notes        – optional free text (e.g. "partial shipment, rest ETA next week")
+
+Note: Delivery tracking lives ENTIRELY on the PO side.
+      Sales Orders track only invoicing / receivables.
 """
 
 from datetime import datetime
@@ -35,7 +37,6 @@ from app.models.enums import EventSource
 
 if TYPE_CHECKING:
     from app.models.purchase_order import POLine
-    from app.models.sales_order import SOLine
     from app.models.user import User
 
 
@@ -43,16 +44,17 @@ class FulfillmentEvent(Base):
     """
     Immutable delivery record.  No updated_at column because rows
     are never modified after creation.
+
+    Primary link is to po_line_id (PO line).  The SO line can be
+    traced via POLine.so_line_id when needed.
     """
 
     __tablename__ = "fulfillment_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    so_line_id: Mapped[int] = mapped_column(
-        ForeignKey("so_lines.id"), nullable=False, index=True,
-    )
-    po_line_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("po_lines.id"), nullable=True,
+    po_line_id: Mapped[int] = mapped_column(
+        ForeignKey("po_lines.id"), nullable=False, index=True,
+        comment="PO line this delivery applies to (REQUIRED)",
     )
     quantity: Mapped[int] = mapped_column(
         Integer, nullable=False,
@@ -75,14 +77,13 @@ class FulfillmentEvent(Base):
     )
 
     # ── Relationships ──────────────────────────────────────
-    so_line: Mapped["SOLine"] = relationship(
-        "SOLine", back_populates="fulfillment_events",
+    po_line: Mapped["POLine"] = relationship(
+        "POLine", back_populates="fulfillment_events",
     )
-    po_line: Mapped[Optional["POLine"]] = relationship("POLine")
     recorder: Mapped["User"] = relationship("User")
 
     def __repr__(self) -> str:
         return (
-            f"<FulfillmentEvent id={self.id} so_line={self.so_line_id} "
+            f"<FulfillmentEvent id={self.id} po_line={self.po_line_id} "
             f"qty={self.quantity} source={self.source.value}>"
         )

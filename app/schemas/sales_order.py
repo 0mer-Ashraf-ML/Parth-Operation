@@ -1,6 +1,9 @@
 """
 Pydantic schemas for Sales Order and SO Line endpoints.
 
+Sales Orders track INVOICING only – no delivery data.
+All delivery/shipment tracking lives on Purchase Order lines.
+
 Naming convention:
   • *Create  – POST request body
   • *Update  – PATCH request body (all fields optional)
@@ -46,7 +49,12 @@ class SOLineUpdate(BaseModel):
 
 
 class SOLineOut(BaseModel):
-    """Response representation of an SO line."""
+    """
+    Response representation of an SO line.
+
+    Note: NO delivery fields here.  Delivery tracking (delivered_qty,
+    remaining_qty) lives on PO lines.  SO lines track only invoicing.
+    """
     id: int
     sales_order_id: int
     sku_id: int
@@ -54,10 +62,8 @@ class SOLineOut(BaseModel):
     ordered_qty: int
     unit_price: Decimal
     due_date: Optional[date] = None
-    delivered_qty: int
     invoiced_qty: int
-    remaining_qty: int
-    invoiceable_qty: int
+    uninvoiced_qty: int
     # Denormalized for readability
     sku_code: Optional[str] = None
     sku_name: Optional[str] = None

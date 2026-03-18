@@ -1,6 +1,9 @@
 """
 Sales Order routes – CRUD for Sales Orders and SO Line management.
 
+Sales Orders track INVOICING only – no delivery data.
+All delivery/shipment tracking lives on Purchase Order lines.
+
 Permission matrix:
     Action              │ Admin │ AM          │ Vendor
     ────────────────────┼───────┼─────────────┼───────
@@ -122,7 +125,7 @@ def update_sales_order(
 
 @router.delete(
     "/{so_id}",
-    summary="Delete a Sales Order (only PENDING with no deliveries)",
+    summary="Delete a Sales Order (only PENDING with no POs)",
 )
 def delete_sales_order(
     so_id: int,
@@ -178,7 +181,7 @@ def update_so_line(
 
 @router.delete(
     "/{so_id}/lines/{line_id}",
-    summary="Remove a line item (only if no deliveries on that line)",
+    summary="Remove a line item (only if no POs reference it)",
 )
 def delete_so_line(
     so_id: int,
@@ -219,8 +222,8 @@ def _so_to_list_item(so) -> dict:
 def _so_to_detail(so) -> dict:
     """Build the full detail representation of a Sales Order with lines."""
     lines = sorted(so.lines, key=lambda ln: ln.line_number) if so.lines else []
-    has_deliveries = any(ln.delivered_qty > 0 for ln in lines)
-    is_deletable = (so.status == SOStatus.PENDING) and not has_deliveries
+    has_pos = bool(so.purchase_orders) if hasattr(so, "purchase_orders") else False
+    is_deletable = (so.status == SOStatus.PENDING) and not has_pos
 
     return SODetailOut(
         id=so.id,
@@ -243,7 +246,7 @@ def _so_to_detail(so) -> dict:
 
 
 def _line_to_out(line) -> dict:
-    """Build the response representation of a single SO line."""
+    """Build the response representation of a single SO line (invoicing only)."""
     return SOLineOut(
         id=line.id,
         sales_order_id=line.sales_order_id,
@@ -252,10 +255,8 @@ def _line_to_out(line) -> dict:
         ordered_qty=line.ordered_qty,
         unit_price=line.unit_price,
         due_date=line.due_date,
-        delivered_qty=line.delivered_qty,
         invoiced_qty=line.invoiced_qty,
-        remaining_qty=line.remaining_qty,
-        invoiceable_qty=line.invoiceable_qty,
+        uninvoiced_qty=line.uninvoiced_qty,
         sku_code=line.sku.sku_code if line.sku else None,
         sku_name=line.sku.name if line.sku else None,
     ).model_dump()

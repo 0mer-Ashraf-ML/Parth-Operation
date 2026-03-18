@@ -21,8 +21,12 @@ POLine
 ──────
 Each row maps back to one SO line.  This lets us trace every PO item
 directly to the customer order that triggered it.
-Per-line dates allow tracking when individual SKUs within a PO have
-different due dates or expected shipment schedules.
+
+Per-line tracking:
+  • status         – each line has its own status (IN_PRODUCTION → DELIVERED)
+  • delivered_qty  – running total of deliveries from fulfillment events
+  • due_date       – per-line due date (inherited from SO line)
+  • expected_ship_date / expected_arrival_date – per-line schedule
 """
 
 import datetime as _dt
@@ -43,9 +47,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
-from app.models.enums import POStatus, ShipmentType
+from app.models.enums import POLineStatus, POStatus, ShipmentType
 
 if TYPE_CHECKING:
+    from app.models.fulfillment import FulfillmentEvent
     from app.models.sales_order import SalesOrder, SOLine
     from app.models.sku import SKU
     from app.models.vendor import Vendor
@@ -106,8 +111,8 @@ class POLine(Base):
     """
     One item on a Purchase Order, linking back to the originating SO line.
 
-    Per-line dates allow granular tracking when each SKU in an order
-    has a different due date or expected shipment schedule.
+    Per-line tracking: status, delivered_qty, dates – all delivery-related
+    tracking lives here.  Fulfillment events are recorded against PO lines.
     """
 
     __tablename__ = "po_lines"
@@ -125,6 +130,20 @@ class POLine(Base):
         ForeignKey("skus.id"), nullable=False,
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # ── Per-line status (each line tracks independently) ──
+    status: Mapped[POLineStatus] = mapped_column(
+        SAEnum(POLineStatus, name="po_line_status", create_constraint=True),
+        nullable=False,
+        default=POLineStatus.IN_PRODUCTION,
+        comment="Per-line delivery status – each line tracks independently",
+    )
+
+    # ── Delivery tracking ─────────────────────────────────
+    delivered_qty: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False,
+        comment="Sum of all fulfillment events for this PO line",
+    )
 
     # ── Per-line date fields ──────────────────────────────
     due_date: Mapped[Optional[_dt.date]] = mapped_column(
@@ -150,6 +169,18 @@ class POLine(Base):
     )
     so_line: Mapped["SOLine"] = relationship("SOLine")
     sku: Mapped["SKU"] = relationship("SKU")
+    fulfillment_events: Mapped[list["FulfillmentEvent"]] = relationship(
+        "FulfillmentEvent", back_populates="po_line",
+    )
+
+    @property
+    def remaining_qty(self) -> int:
+        """Units not yet delivered."""
+        return self.quantity - self.delivered_qty
 
     def __repr__(self) -> str:
-        return f"<POLine id={self.id} po={self.purchase_order_id} sku={self.sku_id} qty={self.quantity}>"
+        return (
+            f"<POLine id={self.id} po={self.purchase_order_id} "
+            f"sku={self.sku_id} qty={self.quantity} "
+            f"delivered={self.delivered_qty} status={self.status.value}>"
+        )

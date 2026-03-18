@@ -1,6 +1,9 @@
 """
 Pydantic schemas for Purchase Order and PO Line endpoints.
 
+PO Lines now carry all delivery tracking: status, delivered_qty,
+remaining_qty, plus per-line schedule dates.
+
 Naming convention:
   • *Create   – POST request body
   • *Update   – PATCH request body (all fields optional)
@@ -12,7 +15,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import POStatus, ShipmentType
+from app.models.enums import POLineStatus, POStatus, ShipmentType
 
 
 # ═══════════════════════════════════════════════════════════
@@ -20,12 +23,16 @@ from app.models.enums import POStatus, ShipmentType
 # ═══════════════════════════════════════════════════════════
 
 class POLineOut(BaseModel):
-    """Response representation of a PO line."""
+    """Response representation of a PO line (includes delivery tracking)."""
     id: int
     purchase_order_id: int
     so_line_id: int
     sku_id: int
     quantity: int
+    status: POLineStatus
+    delivered_qty: int = 0
+    remaining_qty: int = 0
+    is_fully_delivered: bool = False
     due_date: Optional[date] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
@@ -38,7 +45,11 @@ class POLineOut(BaseModel):
 
 
 class POLineUpdate(BaseModel):
-    """Vendor / Admin can update per-line dates."""
+    """Vendor / Admin can update per-line dates and status."""
+    status: Optional[POLineStatus] = Field(
+        None,
+        description="Update per-line status (validated against shipment type flow)",
+    )
     due_date: Optional[date] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
@@ -91,6 +102,7 @@ class POListOut(BaseModel):
     expected_arrival_date: Optional[date] = None
     line_count: int = 0
     total_quantity: int = 0
+    total_delivered: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}

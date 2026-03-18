@@ -2,10 +2,12 @@
 Sales Order service – business logic for SO CRUD and line management.
 
 Key business rules:
-  • Status is ALWAYS derived from line items – never set manually.
+  • SO tracks INVOICING only – no delivery data.
+  • All delivery tracking lives on PO lines.
   • Unit price is locked at SO line creation from tier pricing.
   • AM can only create/access SOs for assigned clients.
   • Vendor cannot access SOs (they see POs instead).
+  • SO status stays PENDING in M1 (invoice-based status in M2).
 """
 
 from decimal import Decimal
@@ -241,7 +243,7 @@ def delete_sales_order(
     """
     Hard-delete a Sales Order.  Only allowed when:
       • Status is PENDING
-      • No line has any delivered_qty > 0
+      • No Purchase Orders have been generated for it
     """
     so = get_sales_order(db, current_user, so_id)
 
@@ -251,9 +253,12 @@ def delete_sales_order(
             f"Only PENDING orders can be deleted."
         )
 
-    has_deliveries = any(line.delivered_qty > 0 for line in so.lines)
-    if has_deliveries:
-        raise BadRequestException("Cannot delete SO with existing deliveries")
+    # Check if POs exist for this SO
+    if so.purchase_orders:
+        raise BadRequestException(
+            "Cannot delete SO with existing Purchase Orders. "
+            "Delete the POs first."
+        )
 
     db.delete(so)
     db.commit()
@@ -300,10 +305,6 @@ def add_so_line(
     db.add(line)
     db.commit()
     db.refresh(line)
-
-    # Recalculate SO status (adding a new line won't change from PENDING,
-    # but keeps the pattern consistent for future use)
-    _derive_and_persist_status(db, so.id)
     return line
 
 
@@ -318,7 +319,7 @@ def update_so_line(
     Update an SO line.
 
     Allowed changes:
-      • ordered_qty  – must be >= delivered_qty
+      • ordered_qty  – any positive value
       • due_date     – any date
     unit_price is locked at creation and cannot be changed.
     """
@@ -337,22 +338,11 @@ def update_so_line(
 
     update_data = data.model_dump(exclude_unset=True)
 
-    # Guard: new ordered_qty must not drop below already-delivered units
-    if "ordered_qty" in update_data:
-        new_qty = update_data["ordered_qty"]
-        if new_qty < line.delivered_qty:
-            raise BadRequestException(
-                f"Cannot set ordered_qty ({new_qty}) below "
-                f"delivered_qty ({line.delivered_qty})"
-            )
-
     for field, value in update_data.items():
         setattr(line, field, value)
 
     db.commit()
     db.refresh(line)
-
-    _derive_and_persist_status(db, so.id)
     return line
 
 
@@ -362,7 +352,7 @@ def delete_so_line(
     so_id: int,
     line_id: int,
 ) -> None:
-    """Remove a line from an SO.  Only if no deliveries exist on that line."""
+    """Remove a line from an SO.  Only if no POs reference it."""
     so = get_sales_order(db, current_user, so_id)
 
     line = db.execute(
@@ -376,61 +366,19 @@ def delete_so_line(
             f"SO Line id={line_id} not found on SO {so.order_number}"
         )
 
-    if line.delivered_qty > 0:
+    # Check if any PO lines reference this SO line
+    from app.models.purchase_order import POLine
+    po_line_count = db.execute(
+        select(POLine.id).where(POLine.so_line_id == line.id)
+    ).scalars().all()
+    if po_line_count:
         raise BadRequestException(
-            f"Cannot delete line with {line.delivered_qty} units already delivered"
+            f"Cannot delete SO line – it is referenced by {len(po_line_count)} PO line(s). "
+            f"Delete the associated POs first."
         )
 
     db.delete(line)
     db.commit()
-
-    _derive_and_persist_status(db, so.id)
-
-
-# ═══════════════════════════════════════════════════════════
-#  STATUS DERIVATION
-# ═══════════════════════════════════════════════════════════
-
-def derive_status(lines: list) -> SOStatus:
-    """
-    Derive the Sales Order status from its line items.
-
-    Rules (from spec):
-      • PENDING           – no line has any deliveries (or no lines at all)
-      • PARTIAL_DELIVERED  – at least one line has deliveries but
-                            not ALL lines are fully delivered
-      • DELIVERED          – every line is fully delivered
-                            (delivered_qty >= ordered_qty for all)
-    """
-    if not lines:
-        return SOStatus.PENDING
-
-    all_delivered = all(ln.delivered_qty >= ln.ordered_qty for ln in lines)
-    any_delivered = any(ln.delivered_qty > 0 for ln in lines)
-
-    if all_delivered:
-        return SOStatus.DELIVERED
-    if any_delivered:
-        return SOStatus.PARTIAL_DELIVERED
-    return SOStatus.PENDING
-
-
-def _derive_and_persist_status(db: Session, so_id: int) -> SOStatus:
-    """Recalculate the SO status from its lines and save it."""
-    so = db.execute(
-        select(SalesOrder)
-        .options(selectinload(SalesOrder.lines))
-        .where(SalesOrder.id == so_id)
-    ).scalar_one_or_none()
-
-    if so is None:
-        return SOStatus.PENDING
-
-    new_status = derive_status(so.lines)
-    if so.status != new_status:
-        so.status = new_status
-        db.commit()
-    return new_status
 
 
 # ═══════════════════════════════════════════════════════════
