@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  
+  /* Primary Colors */
+  --color-primary: #FBB615;
+  --color-primary-hover: rgba(251, 182, 21, 0.15);
+  --color-primary-light: rgba(251, 182, 21, 0.1);
+  --color-primary-border: rgba(251, 182, 21, 0.2);
+  
+  /* Dark Backgrounds */
+  --color-dark-bg: #050505;
+  --color-dark-bg-secondary: #1a1a1a;
+  --color-dark-bg-tertiary: #2d2d2d;
+  
+  /* Text Colors */
+  --color-text-primary: #e5e5e5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-dark: #050505;
+  
+  /* Error/Red Colors */
+  --color-error: #ef4444;
+  --color-error-hover: #dc2626;
+  --color-error-light: rgba(239, 68, 68, 0.1);
+  
+  /* Disabled Colors */
+  --color-disabled-bg: #cbd5e1;
+  --color-disabled-text: #94a3b8;
+  
+  /* Gradient Colors */
+  --color-gradient-start: #1e293b;
+  --color-gradient-end: #334155;
+  
+  /* Shadow */
+  --color-shadow: rgba(0, 0, 0, 0.3);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-poppins);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--gray-1);
+  color: var(--foreground);
+  font-family: var(--font-poppins), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--gray-1);
+}
+
+* {
+  font-family: var(--font-poppins), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+input::placeholder {
+  color: var(--color-text-secondary) !important;
+}
+
+input {
+  color: var(--color-text-primary) !important;
+}
+
+.no-hover-effect:hover {
+  background-color: transparent !important;
+  color: var(--color-primary) !important;
+}
+
+.ag-center-header {
+  text-align: center !important;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes notFoundGlow {
+  0%, 100% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+}
+
+.not-found-glow {
+  animation: notFoundGlow 3s ease-in-out infinite;
+}
