@@ -53,7 +53,7 @@ class FulfillmentEvent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     po_line_id: Mapped[int] = mapped_column(
-        ForeignKey("po_lines.id"), nullable=False, index=True,
+        ForeignKey("po_lines.id", ondelete="CASCADE"), nullable=False, index=True,
         comment="PO line this delivery applies to (REQUIRED)",
     )
     quantity: Mapped[int] = mapped_column(

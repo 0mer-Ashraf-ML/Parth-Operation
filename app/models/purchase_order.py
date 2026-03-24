@@ -171,6 +171,8 @@ class POLine(Base):
     sku: Mapped["SKU"] = relationship("SKU")
     fulfillment_events: Mapped[list["FulfillmentEvent"]] = relationship(
         "FulfillmentEvent", back_populates="po_line",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     @property
