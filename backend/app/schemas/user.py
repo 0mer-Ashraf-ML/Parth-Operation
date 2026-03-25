@@ -4,9 +4,10 @@ Pydantic schemas for user API requests and responses.
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import UserRole
+from app.password_policy import validate_new_password
 
 
 class UserOut(BaseModel):
@@ -26,10 +27,15 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=10, max_length=128)
     full_name: str = Field(..., min_length=1, max_length=255)
     role: UserRole
     vendor_id: int | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        return validate_new_password(v)
 
     @model_validator(mode="after")
     def vendor_required_when_vendor_role(self):
@@ -46,8 +52,15 @@ class UserUpdate(BaseModel):
 
     email: str | None = Field(None, min_length=3, max_length=255)
     full_name: str | None = Field(None, min_length=1, max_length=255)
-    password: str | None = Field(None, min_length=8, max_length=128)
+    password: str | None = Field(None, min_length=10, max_length=128)
     is_active: bool | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return validate_new_password(v)
 
 
 class UserRoleUpdate(BaseModel):
