@@ -41,9 +41,29 @@ def _ensure_vendor_exists(db: Session, vendor_id: int) -> None:
         raise BadRequestException(f"Vendor with id={vendor_id} does not exist")
 
 
+def _active_admin_exists(
+    db: Session,
+    *,
+    exclude_user_id: int | None = None,
+) -> bool:
+    """True if some user has role admin and is_active (optionally excluding one id)."""
+    q = select(User.id).where(
+        User.role == UserRole.ADMIN,
+        User.is_active.is_(True),
+    )
+    if exclude_user_id is not None:
+        q = q.where(User.id != exclude_user_id)
+    return db.execute(q).scalar_one_or_none() is not None
+
+
 def create_user(db: Session, data: UserCreate) -> User:
     if _email_taken(db, data.email):
         raise ConflictException(f"A user with email '{data.email}' already exists")
+
+    if data.role == UserRole.ADMIN and _active_admin_exists(db):
+        raise ConflictException(
+            "An active administrator already exists. Only one active admin is allowed.",
+        )
 
     vendor_id: int | None = None
     if data.role == UserRole.VENDOR:
@@ -80,6 +100,14 @@ def update_user(db: Session, user_id: int, data: UserUpdate) -> User:
         user.password_hash = hash_password(payload["password"])
 
     if "is_active" in payload:
+        if (
+            payload["is_active"] is True
+            and user.role == UserRole.ADMIN
+            and _active_admin_exists(db, exclude_user_id=user.id)
+        ):
+            raise ConflictException(
+                "An active administrator already exists. Only one active admin is allowed.",
+            )
         user.is_active = payload["is_active"]
 
     db.commit()
@@ -104,6 +132,15 @@ def set_user_role(db: Session, user_id: int, data: UserRoleUpdate, actor: Curren
 
     if new_role == UserRole.VENDOR:
         _ensure_vendor_exists(db, new_vendor_id)  # type: ignore[arg-type]
+
+    if (
+        new_role == UserRole.ADMIN
+        and role_changed
+        and _active_admin_exists(db, exclude_user_id=user.id)
+    ):
+        raise ConflictException(
+            "An active administrator already exists. Only one active admin is allowed.",
+        )
 
     if user.role == UserRole.ACCOUNT_MANAGER and new_role != UserRole.ACCOUNT_MANAGER:
         _clear_client_assignments(db, user.id)
