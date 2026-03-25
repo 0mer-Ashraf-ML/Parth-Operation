@@ -147,7 +147,7 @@ def update_purchase_order(
 
 @router.delete(
     "/{po_id}",
-    summary="Delete a PO (only if IN_PRODUCTION)",
+    summary="Delete a PO (only if STARTED)",
 )
 def delete_purchase_order(
     po_id: int,
@@ -191,6 +191,7 @@ def _po_to_list_item(po) -> dict:
     line_count = len(po.lines) if po.lines else 0
     total_quantity = sum(ln.quantity for ln in po.lines) if po.lines else 0
     total_delivered = sum(ln.delivered_qty for ln in po.lines) if po.lines else 0
+    total_cost = _calc_total_cost(po.lines) if po.lines else None
 
     return POListOut(
         id=po.id,
@@ -210,6 +211,7 @@ def _po_to_list_item(po) -> dict:
         line_count=line_count,
         total_quantity=total_quantity,
         total_delivered=total_delivered,
+        total_cost=total_cost,
         created_at=po.created_at,
     ).model_dump()
 
@@ -217,7 +219,10 @@ def _po_to_list_item(po) -> dict:
 def _po_to_detail(po) -> dict:
     """Build full detail representation of a PO with lines."""
     lines = [_line_to_out(ln) for ln in po.lines] if po.lines else []
-    is_deletable = po.status == POStatus.IN_PRODUCTION
+    is_deletable = po.status == POStatus.STARTED
+    total_quantity = sum(ln.quantity for ln in po.lines) if po.lines else 0
+    total_delivered = sum(ln.delivered_qty for ln in po.lines) if po.lines else 0
+    total_cost = _calc_total_cost(po.lines) if po.lines else None
 
     return PODetailOut(
         id=po.id,
@@ -234,6 +239,9 @@ def _po_to_detail(po) -> dict:
         status=po.status,
         expected_ship_date=po.expected_ship_date,
         expected_arrival_date=po.expected_arrival_date,
+        total_quantity=total_quantity,
+        total_delivered=total_delivered,
+        total_cost=total_cost,
         is_deletable=is_deletable,
         created_at=po.created_at,
         updated_at=po.updated_at,
@@ -242,13 +250,20 @@ def _po_to_detail(po) -> dict:
 
 
 def _line_to_out(line) -> dict:
-    """Build response representation of a single PO line (with delivery data)."""
+    """Build response representation of a single PO line (with delivery + cost data)."""
+    from decimal import Decimal
+
+    unit_cost = line.unit_cost
+    line_total = (unit_cost * line.quantity) if unit_cost is not None else None
+
     return POLineOut(
         id=line.id,
         purchase_order_id=line.purchase_order_id,
         so_line_id=line.so_line_id,
         sku_id=line.sku_id,
         quantity=line.quantity,
+        unit_cost=unit_cost,
+        line_total=line_total,
         status=line.status,
         delivered_qty=line.delivered_qty,
         remaining_qty=line.remaining_qty,
@@ -260,6 +275,19 @@ def _line_to_out(line) -> dict:
         sku_code=line.sku.sku_code if line.sku else None,
         sku_name=line.sku.name if line.sku else None,
     ).model_dump()
+
+
+def _calc_total_cost(lines) -> "Decimal | None":
+    """Sum unit_cost × quantity across all lines (None if no costs set)."""
+    from decimal import Decimal
+
+    total = Decimal("0")
+    any_cost = False
+    for ln in lines:
+        if ln.unit_cost is not None:
+            total += ln.unit_cost * ln.quantity
+            any_cost = True
+    return total if any_cost else None
 
 
 def _load_line_with_sku(db: Session, line_id: int) -> POLine:

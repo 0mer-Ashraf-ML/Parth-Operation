@@ -12,7 +12,7 @@ Key fields:
 
 Each client can have:
   • Multiple contacts   (main, secondary, accounting)
-  • Multiple ship-to addresses  (some clients ship to many locations)
+  • Multiple addresses  (ship-to AND billing, each labelled)
 """
 
 from decimal import Decimal
@@ -30,7 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
-from app.models.enums import ContactType
+from app.models.enums import AddressType, ContactType
 
 if TYPE_CHECKING:
     from app.models.sales_order import SalesOrder
@@ -108,6 +108,12 @@ class ClientAddress(Base, TimestampMixin):
     client_id: Mapped[int] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True,
     )
+    address_type: Mapped[AddressType] = mapped_column(
+        SAEnum(AddressType, name="address_type", create_constraint=True),
+        nullable=False,
+        default=AddressType.SHIP_TO,
+        comment="Whether this is a Ship-To or Billing address",
+    )
     label: Mapped[str] = mapped_column(
         String(255), nullable=False,
         comment="Friendly label, e.g. 'Main Warehouse', 'HQ Office'",
@@ -124,4 +130,4 @@ class ClientAddress(Base, TimestampMixin):
     client: Mapped["Client"] = relationship("Client", back_populates="addresses")
 
     def __repr__(self) -> str:
-        return f"<ClientAddress id={self.id} label={self.label!r}>"
+        return f"<ClientAddress id={self.id} label={self.label!r} type={self.address_type.value}>"

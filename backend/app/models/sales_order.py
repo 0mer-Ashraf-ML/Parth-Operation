@@ -9,13 +9,17 @@ back to the original SO.
 
 • order_number  – pulled from the customer's PDF where possible.
 • order_date    – date the customer placed the order (from their PO).
-• due_date      – overall due date for the entire Sales Order.
-• status        – tracks INVOICING progress only.
-                  Pending → Partial Invoiced → Fully Invoiced (M2).
+• status        – auto-derived from PO completion:
+                  PENDING → STARTED → PARTIALLY_COMPLETED → COMPLETED
+• payment_status – separate invoicing track:
+                  NOT_INVOICED → PARTIALLY_INVOICED → FULLY_PAID (M2)
 
 NOTE: All shipment/delivery tracking lives on Purchase Order lines.
       Sales Orders track ONLY invoicing: what has been invoiced,
       what hasn't, and outstanding receivables.
+
+NOTE: Order-level due_date has been removed per client feedback.
+      Due dates live only on SOLine (per-line due dates).
 
 SOLine
 ──────
@@ -43,7 +47,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
-from app.models.enums import SOStatus
+from app.models.enums import SOPaymentStatus, SOStatus
 
 if TYPE_CHECKING:
     from app.models.client import Client, ClientAddress
@@ -71,16 +75,20 @@ class SalesOrder(Base, TimestampMixin):
         default=SOStatus.PENDING,
         index=True,
     )
+    payment_status: Mapped[SOPaymentStatus] = mapped_column(
+        SAEnum(SOPaymentStatus, name="so_payment_status", create_constraint=True),
+        nullable=False,
+        default=SOPaymentStatus.NOT_INVOICED,
+        comment="Invoice/payment tracking: not_invoiced → partially_invoiced → fully_paid (M2)",
+    )
 
     # ── Date fields ───────────────────────────────────────
     order_date: Mapped[Optional[_dt.date]] = mapped_column(
         Date, nullable=True,
         comment="Date the customer placed the order (from their PO)",
     )
-    due_date: Mapped[Optional[_dt.date]] = mapped_column(
-        Date, nullable=True,
-        comment="Overall due date for the entire Sales Order",
-    )
+    # NOTE: Order-level due_date removed per client feedback.
+    #       Due dates now live only on SO lines (per-line).
 
     original_pdf_url: Mapped[Optional[str]] = mapped_column(String(500))
     notes: Mapped[Optional[str]] = mapped_column(Text)

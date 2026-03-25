@@ -3,15 +3,16 @@ Purchase Order service – auto-generation from SO and CRUD.
 
 Key business rules:
   • POs are auto-generated from a Sales Order – ONE PO per vendor.
-    Example: SO has 5 lines, 3 go to Vendor A and 2 to Vendor B
-             → PO-{SO}-A  (3 lines)
-             → PO-{SO}-B  (2 lines)
   • Vendor is resolved per SKU from sku_vendors (default) → SKU.default_vendor_id.
-  • PO status follows a fixed flow depending on shipment type:
+  • PO header status is AUTO-DERIVED:
+      STARTED:   at least one line is not DELIVERED (default).
+      COMPLETED: ALL lines are DELIVERED.
+  • PO line status follows a fixed flow depending on shipment type:
       Drop-ship:  IN_PRODUCTION → PACKED_AND_SHIPPED → DELIVERED
       In-house:   IN_PRODUCTION → PACKED_AND_SHIPPED → READY_FOR_PICKUP → DELIVERED
   • Vendors can only see and update their own POs.
   • AMs can see POs whose parent SO belongs to their assigned clients.
+  • When PO status changes, the parent SO status is auto-derived.
 """
 
 from collections import defaultdict
@@ -25,25 +26,86 @@ from app.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
-from app.models.enums import POLineStatus, POStatus, ShipmentType, UserRole
+from app.models.enums import POLineStatus, POStatus, SOStatus, ShipmentType, UserRole
 from app.models.purchase_order import POLine, PurchaseOrder
-from app.models.sales_order import SOLine, SalesOrder
+from app.models.sales_order import SalesOrder, SOLine
 from app.models.sku import SKU, SKUVendor
 from app.models.vendor import Vendor
 from app.schemas.auth import CurrentUser
 from app.services.permissions import PermissionService
 
+# ── Inventory helper (shared with fulfillment service) ────
+from app.services.fulfillment import _adjust_inventory
 
-# ── Valid status transitions per shipment type ─────────────
-_VALID_TRANSITIONS: dict[tuple[ShipmentType, POStatus], list[POStatus]] = {
-    # Drop-ship flow
-    (ShipmentType.DROP_SHIP, POStatus.IN_PRODUCTION): [POStatus.PACKED_AND_SHIPPED],
-    (ShipmentType.DROP_SHIP, POStatus.PACKED_AND_SHIPPED): [POStatus.DELIVERED],
-    # In-house flow
-    (ShipmentType.IN_HOUSE, POStatus.IN_PRODUCTION): [POStatus.PACKED_AND_SHIPPED],
-    (ShipmentType.IN_HOUSE, POStatus.PACKED_AND_SHIPPED): [POStatus.READY_FOR_PICKUP],
-    (ShipmentType.IN_HOUSE, POStatus.READY_FOR_PICKUP): [POStatus.DELIVERED],
-}
+
+# ═══════════════════════════════════════════════════════════
+#  PO / SO STATUS DERIVATION
+# ═══════════════════════════════════════════════════════════
+
+def derive_po_status(po: PurchaseOrder) -> POStatus:
+    """
+    Derive PO header status from its lines.
+
+    • If ALL lines are DELIVERED → COMPLETED
+    • Otherwise → STARTED
+    """
+    if not po.lines:
+        return POStatus.STARTED
+
+    all_delivered = all(
+        line.status == POLineStatus.DELIVERED for line in po.lines
+    )
+    return POStatus.COMPLETED if all_delivered else POStatus.STARTED
+
+
+def derive_and_persist_po_status(db: Session, po: PurchaseOrder) -> bool:
+    """
+    Derive PO status and persist if changed. Returns True if status changed.
+    """
+    new_status = derive_po_status(po)
+    if new_status != po.status:
+        po.status = new_status
+        return True
+    return False
+
+
+def derive_so_status(db: Session, so_id: int) -> SOStatus:
+    """
+    Derive SO status from its POs.
+
+    • No POs → PENDING
+    • All POs COMPLETED → COMPLETED
+    • Some POs COMPLETED, some not → PARTIALLY_COMPLETED
+    • POs exist but none COMPLETED → STARTED
+    """
+    pos = db.execute(
+        select(PurchaseOrder).where(PurchaseOrder.sales_order_id == so_id)
+    ).scalars().all()
+
+    if not pos:
+        return SOStatus.PENDING
+
+    completed_count = sum(1 for po in pos if po.status == POStatus.COMPLETED)
+
+    if completed_count == len(pos):
+        return SOStatus.COMPLETED
+    elif completed_count > 0:
+        return SOStatus.PARTIALLY_COMPLETED
+    else:
+        return SOStatus.STARTED
+
+
+def derive_and_persist_so_status(db: Session, so_id: int) -> None:
+    """Derive SO status from its POs and persist if changed."""
+    so = db.execute(
+        select(SalesOrder).where(SalesOrder.id == so_id)
+    ).scalar_one_or_none()
+    if so is None:
+        return
+
+    new_status = derive_so_status(db, so_id)
+    if new_status != so.status:
+        so.status = new_status
 
 
 # ═══════════════════════════════════════════════════════════
@@ -65,6 +127,7 @@ def generate_pos_from_so(
       3. For each SO line, resolve the vendor (SKUVendor default → SKU.default_vendor_id).
       4. Group lines by vendor.
       5. Create one PO per vendor with corresponding PO lines.
+      6. Update SO status to STARTED.
     """
     # 1. Load SO with lines + SKUs
     so = db.execute(
@@ -98,15 +161,18 @@ def generate_pos_from_so(
         )
 
     # 4. Resolve vendor for each SO line & group by vendor
+    #    Also capture vendor_cost per SO line for PO line creation
     vendor_lines: dict[int, list[SOLine]] = defaultdict(list)
+    so_line_vendor_cost: dict[int, "Decimal | None"] = {}  # so_line.id → vendor_cost
     unresolved: list[str] = []
 
     for so_line in so.lines:
-        vendor_id = _resolve_vendor_for_sku(db, so_line.sku_id)
+        vendor_id, vendor_cost = _resolve_vendor_for_sku(db, so_line.sku_id)
         if vendor_id is None:
             unresolved.append(so_line.sku.sku_code if so_line.sku else f"sku_id={so_line.sku_id}")
         else:
             vendor_lines[vendor_id].append(so_line)
+            so_line_vendor_cost[so_line.id] = vendor_cost
 
     if unresolved:
         raise BadRequestException(
@@ -142,7 +208,7 @@ def generate_pos_from_so(
             sales_order_id=so.id,
             vendor_id=vendor_id,
             shipment_type=shipment_type,
-            status=POStatus.IN_PRODUCTION,
+            status=POStatus.STARTED,
         )
 
         for so_line in lines:
@@ -151,6 +217,7 @@ def generate_pos_from_so(
                     so_line_id=so_line.id,
                     sku_id=so_line.sku_id,
                     quantity=so_line.ordered_qty,
+                    unit_cost=so_line_vendor_cost.get(so_line.id),
                     due_date=so_line.due_date,
                 )
             )
@@ -158,6 +225,9 @@ def generate_pos_from_so(
         db.add(po)
         created_pos.append(po)
         suffix_idx += 1
+
+    # 6. Update SO status to STARTED
+    so.status = SOStatus.STARTED
 
     db.commit()
     for po in created_pos:
@@ -259,26 +329,20 @@ def update_purchase_order(
     """
     Update PO fields.
 
-    • status             – validated against the shipment-type flow.
-    • shipment_type      – only changeable while IN_PRODUCTION.
+    NOTE: PO header status is auto-derived and CANNOT be set manually.
+    Only shipment_type and dates are editable.
+
+    • shipment_type      – only changeable while STARTED.
     • expected_ship_date – free update.
     • expected_arrival_date – free update.
     """
     po = get_purchase_order(db, current_user, po_id)
 
-    # ── Status transition ──────────────────────────────────
-    if "status" in kwargs and kwargs["status"] is not None:
-        new_status = kwargs["status"]
-        if new_status != po.status:
-            _validate_status_transition(po.shipment_type, po.status, new_status)
-            po.status = new_status
-
     # ── Shipment type change ───────────────────────────────
     if "shipment_type" in kwargs and kwargs["shipment_type"] is not None:
-        if po.status != POStatus.IN_PRODUCTION:
+        if po.status == POStatus.COMPLETED:
             raise BadRequestException(
-                f"Cannot change shipment type once PO is in "
-                f"'{po.status.value}' status"
+                "Cannot change shipment type on a COMPLETED PO"
             )
         po.shipment_type = kwargs["shipment_type"]
 
@@ -303,9 +367,12 @@ def update_po_line(
     """
     Update per-line fields on a PO line (status, dates).
 
-    Per-line status follows the same flow as PO-level status:
+    Per-line status follows a fixed flow:
       Drop-ship: IN_PRODUCTION → PACKED_AND_SHIPPED → DELIVERED
       In-house:  IN_PRODUCTION → PACKED_AND_SHIPPED → READY_FOR_PICKUP → DELIVERED
+
+    When a line reaches DELIVERED, the PO header status is auto-derived.
+    When PO status changes, the parent SO status is also auto-derived.
     """
     po = get_purchase_order(db, current_user, po_id)
 
@@ -328,7 +395,23 @@ def update_po_line(
             _validate_line_status_transition(
                 po.shipment_type, line.status, new_status,
             )
+
+            if (
+                po.shipment_type == ShipmentType.IN_HOUSE
+                and new_status == POLineStatus.DELIVERED
+                and current_user.role != UserRole.ADMIN
+            ):
+                raise ForbiddenException(
+                    "Only an Admin can mark in-house PO lines as Delivered. "
+                    "The vendor marks Ready for Pickup, then an Admin confirms Delivered."
+                )
+
+            old_status = line.status
             line.status = new_status
+
+            # Auto-adjust inventory: decrement when PO line reaches DELIVERED
+            if new_status == POLineStatus.DELIVERED and old_status != POLineStatus.DELIVERED:
+                _adjust_inventory(db, line.sku_id, -line.delivered_qty)
 
     if "due_date" in kwargs:
         line.due_date = kwargs["due_date"]
@@ -336,6 +419,20 @@ def update_po_line(
         line.expected_ship_date = kwargs["expected_ship_date"]
     if "expected_arrival_date" in kwargs:
         line.expected_arrival_date = kwargs["expected_arrival_date"]
+
+    # ── Auto-derive PO header status ──────────────────────
+    # Reload PO lines to get fresh state
+    db.flush()
+    po = db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.lines))
+        .where(PurchaseOrder.id == po_id)
+    ).scalar_one()
+    po_changed = derive_and_persist_po_status(db, po)
+
+    # If PO status changed, also re-derive SO status
+    if po_changed:
+        derive_and_persist_so_status(db, po.sales_order_id)
 
     db.commit()
     db.refresh(line)
@@ -348,17 +445,23 @@ def delete_purchase_order(
     po_id: int,
 ) -> None:
     """
-    Hard-delete a PO.  Only allowed when status is IN_PRODUCTION.
+    Hard-delete a PO.  Only allowed when status is STARTED.
+    After deletion, re-derives the parent SO status.
     """
     po = get_purchase_order(db, current_user, po_id)
 
-    if po.status != POStatus.IN_PRODUCTION:
+    if po.status == POStatus.COMPLETED:
         raise BadRequestException(
-            f"Cannot delete PO in '{po.status.value}' status. "
-            f"Only IN_PRODUCTION POs can be deleted."
+            "Cannot delete a COMPLETED PO."
         )
 
+    so_id = po.sales_order_id
     db.delete(po)
+    db.flush()
+
+    # Re-derive SO status after PO deletion
+    derive_and_persist_so_status(db, so_id)
+
     db.commit()
 
 
@@ -366,16 +469,20 @@ def delete_purchase_order(
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 
-def _resolve_vendor_for_sku(db: Session, sku_id: int) -> int | None:
+def _resolve_vendor_for_sku(db: Session, sku_id: int) -> tuple[int | None, "Decimal | None"]:
     """
-    Find the vendor that should supply a given SKU.
+    Find the vendor that should supply a given SKU, plus the vendor cost.
+
+    Returns (vendor_id, vendor_cost) – either or both can be None.
 
     Resolution order:
-      1. sku_vendors row with is_default = True  → use that vendor_id.
-      2. SKU.default_vendor_id                   → use that.
+      1. sku_vendors row with is_default = True  → use that vendor_id + vendor_cost.
+      2. SKU.default_vendor_id                   → use that (vendor_cost from sku_vendors if exists).
       3. Any sku_vendors row (first found)       → fallback.
-      4. None                                    → cannot auto-generate.
+      4. (None, None)                            → cannot auto-generate.
     """
+    from decimal import Decimal  # local to avoid circular import at module level
+
     # 1. Explicit default in sku_vendors
     default_sv = db.execute(
         select(SKUVendor).where(
@@ -384,14 +491,22 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> int | None:
         )
     ).scalar_one_or_none()
     if default_sv is not None:
-        return default_sv.vendor_id
+        return default_sv.vendor_id, default_sv.vendor_cost
 
     # 2. SKU.default_vendor_id
     sku = db.execute(
         select(SKU).where(SKU.id == sku_id)
     ).scalar_one_or_none()
     if sku and sku.default_vendor_id:
-        return sku.default_vendor_id
+        # Try to find vendor_cost from sku_vendors for this vendor
+        sv = db.execute(
+            select(SKUVendor).where(
+                SKUVendor.sku_id == sku_id,
+                SKUVendor.vendor_id == sku.default_vendor_id,
+            )
+        ).scalar_one_or_none()
+        cost = sv.vendor_cost if sv else None
+        return sku.default_vendor_id, cost
 
     # 3. First linked vendor (non-default fallback)
     any_sv = db.execute(
@@ -400,28 +515,9 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> int | None:
         .limit(1)
     ).scalar_one_or_none()
     if any_sv is not None:
-        return any_sv.vendor_id
+        return any_sv.vendor_id, any_sv.vendor_cost
 
-    return None
-
-
-def _validate_status_transition(
-    shipment_type: ShipmentType,
-    current_status: POStatus,
-    new_status: POStatus,
-) -> None:
-    """Validate that the requested status transition is allowed."""
-    key = (shipment_type, current_status)
-    valid_next = _VALID_TRANSITIONS.get(key, [])
-
-    if new_status not in valid_next:
-        flow = "Drop-Ship" if shipment_type == ShipmentType.DROP_SHIP else "In-House"
-        valid_str = ", ".join(s.value for s in valid_next) if valid_next else "none (terminal state)"
-        raise BadRequestException(
-            f"Invalid status transition for {flow} flow: "
-            f"'{current_status.value}' → '{new_status.value}'. "
-            f"Valid next: [{valid_str}]"
-        )
+    return None, None
 
 
 # ── Valid LINE-level status transitions (mirrors PO-level) ──

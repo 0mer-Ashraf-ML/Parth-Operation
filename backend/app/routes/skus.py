@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import require_admin, require_any_role
 from app.schemas.auth import CurrentUser
+from app.models.enums import UserRole
 from app.schemas.sku import (
     SKUCreate,
     SKUDetailOut,
@@ -24,6 +25,7 @@ from app.schemas.sku import (
     SKUUpdate,
     SKUVendorCreate,
     SKUVendorOut,
+    SKUVendorUpdate,
     TierPricingCreate,
     TierPricingOut,
     TierPricingUpdate,
@@ -67,7 +69,7 @@ def get_sku(
     db: Session = Depends(get_db),
 ):
     sku = sku_svc.get_sku(db, sku_id)
-    detail = _sku_to_detail(sku)
+    detail = _sku_to_detail(sku, hide_tier_pricing=(current_user.role == UserRole.VENDOR))
     return {"success": True, "data": detail}
 
 
@@ -209,6 +211,7 @@ def list_sku_vendors(
                 sku_id=m.sku_id,
                 vendor_id=m.vendor_id,
                 is_default=m.is_default,
+                vendor_cost=m.vendor_cost,
                 vendor_name=m.vendor.company_name if m.vendor else None,
             )
             for m in mappings
@@ -218,7 +221,7 @@ def list_sku_vendors(
 
 @router.post(
     "/{sku_id}/vendors",
-    summary="Link a vendor to a SKU",
+    summary="Link a vendor to a SKU (with optional vendor cost)",
     status_code=201,
 )
 def add_sku_vendor(
@@ -228,9 +231,44 @@ def add_sku_vendor(
     db: Session = Depends(get_db),
 ):
     sv = sku_svc.add_sku_vendor(db, sku_id, body)
+    # Reload with vendor relationship for vendor_name
+    mappings = sku_svc.list_sku_vendors(db, sku_id)
+    sv_out = next((m for m in mappings if m.vendor_id == body.vendor_id), sv)
     return {
         "success": True,
-        "data": SKUVendorOut.model_validate(sv),
+        "data": SKUVendorOut(
+            id=sv_out.id,
+            sku_id=sv_out.sku_id,
+            vendor_id=sv_out.vendor_id,
+            is_default=sv_out.is_default,
+            vendor_cost=sv_out.vendor_cost,
+            vendor_name=sv_out.vendor.company_name if sv_out.vendor else None,
+        ),
+    }
+
+
+@router.patch(
+    "/{sku_id}/vendors/{vendor_id}",
+    summary="Update a SKU-Vendor mapping (vendor cost, default flag)",
+)
+def update_sku_vendor(
+    sku_id: int,
+    vendor_id: int,
+    body: SKUVendorUpdate,
+    current_user: CurrentUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    sv = sku_svc.update_sku_vendor(db, sku_id, vendor_id, body)
+    return {
+        "success": True,
+        "data": SKUVendorOut(
+            id=sv.id,
+            sku_id=sv.sku_id,
+            vendor_id=sv.vendor_id,
+            is_default=sv.is_default,
+            vendor_cost=sv.vendor_cost,
+            vendor_name=sv.vendor.company_name if sv.vendor else None,
+        ),
     }
 
 
@@ -250,9 +288,12 @@ def remove_sku_vendor(
 
 # ── Helper ─────────────────────────────────────────────────
 
-def _sku_to_detail(sku) -> SKUDetailOut:
+def _sku_to_detail(sku, *, hide_tier_pricing: bool = False) -> SKUDetailOut:
     """
     Build the detail response, enriching SKUVendor rows with vendor_name.
+
+    hide_tier_pricing: if True, tier_prices list is returned empty.
+      Used for Vendor-role responses – vendors must never see our client pricing.
     """
     vendor_outs = []
     for sv in sku.sku_vendors:
@@ -262,6 +303,7 @@ def _sku_to_detail(sku) -> SKUDetailOut:
                 sku_id=sv.sku_id,
                 vendor_id=sv.vendor_id,
                 is_default=sv.is_default,
+                vendor_cost=sv.vendor_cost,
                 vendor_name=sv.vendor.company_name if sv.vendor else None,
             )
         )
@@ -278,6 +320,9 @@ def _sku_to_detail(sku) -> SKUDetailOut:
         is_active=sku.is_active,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
-        tier_prices=[TierPricingOut.model_validate(tp) for tp in sku.tier_prices],
+        tier_prices=(
+            [] if hide_tier_pricing
+            else [TierPricingOut.model_validate(tp) for tp in sku.tier_prices]
+        ),
         sku_vendors=vendor_outs,
     )

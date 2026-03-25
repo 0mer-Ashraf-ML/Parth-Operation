@@ -7,7 +7,10 @@ Key business rules:
   • Unit price is locked at SO line creation from tier pricing.
   • AM can only create/access SOs for assigned clients.
   • Vendor cannot access SOs (they see POs instead).
-  • SO status stays PENDING in M1 (invoice-based status in M2).
+  • SO status is auto-derived from PO completion:
+      PENDING → STARTED → PARTIALLY_COMPLETED → COMPLETED
+  • payment_status is separate: NOT_INVOICED → PARTIALLY_INVOICED → FULLY_PAID (M2).
+  • Order-level due_date has been removed.  Due dates live on SO lines only.
 """
 
 from decimal import Decimal
@@ -21,7 +24,7 @@ from app.exceptions import (
     NotFoundException,
 )
 from app.models.client import Client, ClientAddress
-from app.models.enums import SOStatus
+from app.models.enums import SOPaymentStatus, SOStatus
 from app.models.sales_order import SalesOrder, SOLine
 from app.models.sku import SKU
 from app.schemas.auth import CurrentUser
@@ -112,6 +115,7 @@ def create_sales_order(
       4. For each line, unit_price is auto-resolved from tier pricing
          if not explicitly provided.
       5. Status is set to PENDING.
+      6. payment_status defaults to NOT_INVOICED.
     """
     # 1. Validate client
     client = db.execute(
@@ -148,16 +152,16 @@ def create_sales_order(
                 f"does not belong to client id={data.client_id}"
             )
 
-    # 4. Build SO header
+    # 4. Build SO header (no order-level due_date)
     so = SalesOrder(
         order_number=data.order_number,
         client_id=data.client_id,
         ship_to_address_id=data.ship_to_address_id,
         order_date=data.order_date,
-        due_date=data.due_date,
         original_pdf_url=data.original_pdf_url,
         notes=data.notes,
         status=SOStatus.PENDING,
+        payment_status=SOPaymentStatus.NOT_INVOICED,
         created_by=current_user.user_id,
     )
 

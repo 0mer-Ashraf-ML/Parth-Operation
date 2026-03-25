@@ -1,5 +1,10 @@
 """
 Pydantic schemas for SKU, TierPricing, and SKUVendor endpoints.
+
+Note on vendor_cost vs tier pricing:
+  • vendor_cost (on SKUVendor) = what WE PAY the vendor per unit.
+  • tier pricing (on TierPricing) = what we CHARGE the client.
+  Vendors must NEVER see tier pricing data in any response.
 """
 
 from datetime import datetime
@@ -41,9 +46,23 @@ class TierPricingOut(BaseModel):
 # ═══════════════════════════════════════════════════════════
 
 class SKUVendorCreate(BaseModel):
-    """Link a vendor to a SKU."""
+    """Link a vendor to a SKU (with optional vendor cost)."""
     vendor_id: int
     is_default: bool = False
+    vendor_cost: Optional[Decimal] = Field(
+        None, ge=0, decimal_places=2,
+        description="What we pay the vendor per unit (separate from tier pricing)",
+        examples=[Decimal("1.75")],
+    )
+
+
+class SKUVendorUpdate(BaseModel):
+    """Update a SKU-Vendor mapping (vendor cost, default flag)."""
+    is_default: Optional[bool] = None
+    vendor_cost: Optional[Decimal] = Field(
+        None, ge=0, decimal_places=2,
+        description="What we pay the vendor per unit",
+    )
 
 
 class SKUVendorOut(BaseModel):
@@ -51,6 +70,7 @@ class SKUVendorOut(BaseModel):
     sku_id: int
     vendor_id: int
     is_default: bool
+    vendor_cost: Optional[Decimal] = None
     vendor_name: Optional[str] = None  # populated by the service layer
 
     model_config = {"from_attributes": True}

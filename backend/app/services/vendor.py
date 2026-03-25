@@ -1,20 +1,29 @@
 """
-Vendor service – business logic for Vendor CRUD.
+Vendor service – business logic for Vendor CRUD and VendorAddress CRUD.
 
-Only Admins can create, update, or delete vendors.
+Only Admins can create, update, or delete vendors and their addresses.
 Admin and Account Managers can list/view vendors.
 Vendors can only see their own record.
 """
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions import ConflictException, ForbiddenException, NotFoundException
 from app.models.enums import UserRole
-from app.models.vendor import Vendor
+from app.models.vendor import Vendor, VendorAddress
 from app.schemas.auth import CurrentUser
-from app.schemas.vendor import VendorCreate, VendorUpdate
+from app.schemas.vendor import (
+    VendorAddressCreate,
+    VendorAddressUpdate,
+    VendorCreate,
+    VendorUpdate,
+)
 
+
+# ═══════════════════════════════════════════════════════════
+#  VENDOR CRUD
+# ═══════════════════════════════════════════════════════════
 
 def list_vendors(
     db: Session,
@@ -29,7 +38,7 @@ def list_vendors(
     • Admin / AM → all vendors.
     • Vendor     → only their own vendor record.
     """
-    query = select(Vendor)
+    query = select(Vendor).options(selectinload(Vendor.addresses))
 
     if current_user.role == UserRole.VENDOR:
         if current_user.vendor_id is None:
@@ -42,13 +51,15 @@ def list_vendors(
         query = query.where(Vendor.company_name.ilike(f"%{search}%"))
 
     query = query.order_by(Vendor.company_name)
-    return list(db.execute(query).scalars().all())
+    return list(db.execute(query).scalars().unique().all())
 
 
 def get_vendor(db: Session, current_user: CurrentUser, vendor_id: int) -> Vendor:
-    """Fetch a single vendor by ID.  Vendors can only see their own record."""
+    """Fetch a single vendor by ID with addresses.  Vendors can only see their own record."""
     vendor = db.execute(
-        select(Vendor).where(Vendor.id == vendor_id)
+        select(Vendor)
+        .options(selectinload(Vendor.addresses))
+        .where(Vendor.id == vendor_id)
     ).scalar_one_or_none()
 
     if vendor is None:
@@ -62,7 +73,7 @@ def get_vendor(db: Session, current_user: CurrentUser, vendor_id: int) -> Vendor
 
 
 def create_vendor(db: Session, data: VendorCreate) -> Vendor:
-    """Create a new vendor.  Only Admins (enforced at route level)."""
+    """Create a new vendor with optional nested addresses.  Only Admins (enforced at route level)."""
     existing = db.execute(
         select(Vendor).where(Vendor.company_name == data.company_name)
     ).scalar_one_or_none()
@@ -76,6 +87,22 @@ def create_vendor(db: Session, data: VendorCreate) -> Vendor:
         phone=data.phone,
         lead_time_weeks=data.lead_time_weeks,
     )
+
+    # Nested addresses
+    for a in data.addresses:
+        vendor.addresses.append(
+            VendorAddress(
+                label=a.label,
+                address_line_1=a.address_line_1,
+                address_line_2=a.address_line_2,
+                city=a.city,
+                state=a.state,
+                zip_code=a.zip_code,
+                country=a.country,
+                is_default=a.is_default,
+            )
+        )
+
     db.add(vendor)
     db.commit()
     db.refresh(vendor)
@@ -105,3 +132,107 @@ def delete_vendor(db: Session, current_user: CurrentUser, vendor_id: int) -> Non
     vendor = get_vendor(db, current_user, vendor_id)
     vendor.is_active = False
     db.commit()
+
+
+# ═══════════════════════════════════════════════════════════
+#  VENDOR ADDRESS CRUD
+# ═══════════════════════════════════════════════════════════
+
+def add_vendor_address(
+    db: Session,
+    current_user: CurrentUser,
+    vendor_id: int,
+    data: VendorAddressCreate,
+) -> VendorAddress:
+    """Add a new address to an existing vendor."""
+    get_vendor(db, current_user, vendor_id)
+
+    # If this is the default, un-default all others
+    if data.is_default:
+        _clear_default_addresses(db, vendor_id)
+
+    address = VendorAddress(
+        vendor_id=vendor_id,
+        label=data.label,
+        address_line_1=data.address_line_1,
+        address_line_2=data.address_line_2,
+        city=data.city,
+        state=data.state,
+        zip_code=data.zip_code,
+        country=data.country,
+        is_default=data.is_default,
+    )
+    db.add(address)
+    db.commit()
+    db.refresh(address)
+    return address
+
+
+def update_vendor_address(
+    db: Session,
+    current_user: CurrentUser,
+    vendor_id: int,
+    address_id: int,
+    data: VendorAddressUpdate,
+) -> VendorAddress:
+    """Update an existing address on a vendor."""
+    get_vendor(db, current_user, vendor_id)
+
+    address = db.execute(
+        select(VendorAddress).where(
+            VendorAddress.id == address_id,
+            VendorAddress.vendor_id == vendor_id,
+        )
+    ).scalar_one_or_none()
+
+    if address is None:
+        raise NotFoundException(f"Address with id={address_id} not found on vendor {vendor_id}")
+
+    # If setting as default, un-default all others first
+    if data.is_default is True:
+        _clear_default_addresses(db, vendor_id)
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(address, field, value)
+
+    db.commit()
+    db.refresh(address)
+    return address
+
+
+def delete_vendor_address(
+    db: Session,
+    current_user: CurrentUser,
+    vendor_id: int,
+    address_id: int,
+) -> None:
+    """Hard-delete an address from a vendor."""
+    get_vendor(db, current_user, vendor_id)
+
+    address = db.execute(
+        select(VendorAddress).where(
+            VendorAddress.id == address_id,
+            VendorAddress.vendor_id == vendor_id,
+        )
+    ).scalar_one_or_none()
+
+    if address is None:
+        raise NotFoundException(f"Address with id={address_id} not found on vendor {vendor_id}")
+
+    db.delete(address)
+    db.commit()
+
+
+# ── Internal helpers ──────────────────────────────────────
+
+def _clear_default_addresses(db: Session, vendor_id: int) -> None:
+    """Set is_default=False on all addresses for a vendor."""
+    addresses = db.execute(
+        select(VendorAddress).where(
+            VendorAddress.vendor_id == vendor_id,
+            VendorAddress.is_default == True,  # noqa: E712
+        )
+    ).scalars().all()
+    for addr in addresses:
+        addr.is_default = False

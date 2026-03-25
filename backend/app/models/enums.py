@@ -22,22 +22,51 @@ class ContactType(str, enum.Enum):
     ACCOUNTING = "accounting"
 
 
+class AddressType(str, enum.Enum):
+    """
+    Type of address on a client or vendor profile.
+    Client addresses can be either ship-to or billing.
+    """
+    SHIP_TO = "ship_to"
+    BILLING = "billing"
+
+
 class SOStatus(str, enum.Enum):
     """
-    Sales Order status – tracks INVOICING only (not delivery).
+    Sales Order status – auto-derived from PO completion.
 
-    Delivery tracking lives entirely on Purchase Orders / PO Lines.
+    Flow:
+      PENDING → STARTED → PARTIALLY_COMPLETED → COMPLETED
 
-    M1 values (DB-compatible):
-      • PENDING           – default; no invoicing yet
-      • PARTIAL_DELIVERED  – legacy name; will be replaced in M2
-      • DELIVERED          – legacy name; will be replaced in M2
+    - PENDING:              No POs generated yet (default at creation).
+    - STARTED:              POs have been generated.
+    - PARTIALLY_COMPLETED:  Some POs completed, some not.
+    - COMPLETED:            All POs completed.
 
-    M2 will add: PARTIAL_INVOICED, FULLY_INVOICED via migration.
+    Legacy values (kept for DB backward compat – NOT used in new code):
+      • partial_delivered
+      • delivered
     """
     PENDING = "pending"
-    PARTIAL_DELIVERED = "partial_delivered"  # Legacy – kept for DB compat
-    DELIVERED = "delivered"                  # Legacy – kept for DB compat
+    STARTED = "started"
+    PARTIALLY_COMPLETED = "partially_completed"
+    COMPLETED = "completed"
+    # Legacy – kept only for DB backward compatibility
+    PARTIAL_DELIVERED = "partial_delivered"
+    DELIVERED = "delivered"
+
+
+class SOPaymentStatus(str, enum.Enum):
+    """
+    Payment / invoicing status on a Sales Order.
+    Separate from the order-completion status.
+
+    M1: defaults to NOT_INVOICED for all SOs.
+    M2: invoicing module will update this field.
+    """
+    NOT_INVOICED = "not_invoiced"
+    PARTIALLY_INVOICED = "partially_invoiced"
+    FULLY_PAID = "fully_paid"
 
 
 class POLineStatus(str, enum.Enum):
@@ -55,13 +84,20 @@ class POLineStatus(str, enum.Enum):
 
 class POStatus(str, enum.Enum):
     """
-    Purchase Order status – moves through a fixed sequence.
-    Drop-ship: IN_PRODUCTION → PACKED_AND_SHIPPED → DELIVERED
-    In-house:  IN_PRODUCTION → PACKED_AND_SHIPPED → READY_FOR_PICKUP → DELIVERED
+    Purchase Order header status – auto-derived from line items.
+
+    - STARTED:   At least one line is not yet DELIVERED (default).
+    - COMPLETED: ALL lines are DELIVERED.
+
+    Legacy values (kept for DB backward compat – NOT used in new code):
+      • in_production, packed_and_shipped, ready_for_pickup, delivered
     """
+    STARTED = "started"
+    COMPLETED = "completed"
+    # Legacy – kept only for DB backward compatibility
     IN_PRODUCTION = "in_production"
     PACKED_AND_SHIPPED = "packed_and_shipped"
-    READY_FOR_PICKUP = "ready_for_pickup"  # in-house only
+    READY_FOR_PICKUP = "ready_for_pickup"
     DELIVERED = "delivered"
 
 

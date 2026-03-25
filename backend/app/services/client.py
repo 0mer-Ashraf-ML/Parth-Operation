@@ -106,6 +106,7 @@ def create_client(db: Session, current_user: CurrentUser, data: ClientCreate) ->
     for a in data.addresses:
         client.addresses.append(
             ClientAddress(
+                address_type=a.address_type,
                 label=a.label,
                 address_line_1=a.address_line_1,
                 address_line_2=a.address_line_2,
@@ -250,6 +251,7 @@ def add_address(
 
     address = ClientAddress(
         client_id=client_id,
+        address_type=data.address_type,
         label=data.label,
         address_line_1=data.address_line_1,
         address_line_2=data.address_line_2,

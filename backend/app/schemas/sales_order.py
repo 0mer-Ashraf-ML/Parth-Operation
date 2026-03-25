@@ -4,6 +4,15 @@ Pydantic schemas for Sales Order and SO Line endpoints.
 Sales Orders track INVOICING only – no delivery data.
 All delivery/shipment tracking lives on Purchase Order lines.
 
+Status is auto-derived from PO completion:
+  PENDING → STARTED → PARTIALLY_COMPLETED → COMPLETED
+
+Payment status is separate (M2):
+  NOT_INVOICED → PARTIALLY_INVOICED → FULLY_PAID
+
+NOTE: Order-level due_date has been removed.
+      Due dates live only on SO lines (per-line).
+
 Naming convention:
   • *Create  – POST request body
   • *Update  – PATCH request body (all fields optional)
@@ -16,7 +25,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import SOStatus
+from app.models.enums import SOPaymentStatus, SOStatus
 
 
 # ═══════════════════════════════════════════════════════════
@@ -86,9 +95,7 @@ class SOCreate(BaseModel):
     order_date: Optional[date] = Field(
         None, description="Date the customer placed the order (from their PO)",
     )
-    due_date: Optional[date] = Field(
-        None, description="Overall due date for the entire Sales Order",
-    )
+    # NOTE: order-level due_date removed – use per-line due dates instead
     original_pdf_url: Optional[str] = Field(None, max_length=500)
     notes: Optional[str] = None
     lines: list[SOLineCreate] = Field(
@@ -102,7 +109,7 @@ class SOUpdate(BaseModel):
     order_number: Optional[str] = Field(None, min_length=1, max_length=100)
     ship_to_address_id: Optional[int] = None
     order_date: Optional[date] = None
-    due_date: Optional[date] = None
+    # NOTE: order-level due_date removed – use per-line due dates instead
     notes: Optional[str] = None
 
 
@@ -113,8 +120,8 @@ class SOListOut(BaseModel):
     client_id: int
     client_name: Optional[str] = None
     status: SOStatus
+    payment_status: SOPaymentStatus
     order_date: Optional[date] = None
-    due_date: Optional[date] = None
     line_count: int = 0
     total_amount: Decimal = Decimal("0.00")
     created_at: datetime
@@ -130,8 +137,8 @@ class SODetailOut(BaseModel):
     client_name: Optional[str] = None
     ship_to_address_id: Optional[int] = None
     status: SOStatus
+    payment_status: SOPaymentStatus
     order_date: Optional[date] = None
-    due_date: Optional[date] = None
     original_pdf_url: Optional[str] = None
     notes: Optional[str] = None
     created_by: int

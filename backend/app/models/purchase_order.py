@@ -9,8 +9,12 @@ order by vendor and creates one PO per vendor.
            → PO-1025-A  (Vendor A's portion)
            → PO-1025-B  (Vendor B's portion)
 
-Vendors log in and only see their own POs.  They move the status
+Vendors log in and only see their own POs.  They update per-line status
 through a fixed flow depending on shipment type.
+
+PO header status is AUTO-DERIVED from line items:
+  • STARTED:   default – at least one line is not DELIVERED.
+  • COMPLETED: all lines are DELIVERED.
 
 All shipment/delivery tracking lives here – NOT on the Sales Order.
   • expected_ship_date    – when vendor expects to ship goods
@@ -44,6 +48,7 @@ from sqlalchemy import (
     String,
     func,
 )
+# Note: Numeric is used for unit_cost (Decimal column).
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -76,7 +81,8 @@ class PurchaseOrder(Base, TimestampMixin):
     status: Mapped[POStatus] = mapped_column(
         SAEnum(POStatus, name="po_status", create_constraint=True),
         nullable=False,
-        default=POStatus.IN_PRODUCTION,
+        default=POStatus.STARTED,
+        comment="Auto-derived: STARTED until all lines DELIVERED, then COMPLETED",
     )
 
     # ── Date fields (updated by vendor) ───────────────────
@@ -130,6 +136,10 @@ class POLine(Base):
         ForeignKey("skus.id"), nullable=False,
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_cost: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 2), nullable=True,
+        comment="What we pay the vendor per unit (auto-pulled from SKUVendor.vendor_cost at PO generation)",
+    )
 
     # ── Per-line status (each line tracks independently) ──
     status: Mapped[POLineStatus] = mapped_column(

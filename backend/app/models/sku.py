@@ -93,6 +93,10 @@ class SKUVendor(Base):
     """
     Maps a SKU to all vendors that can supply it.
     One vendor per SKU can be flagged as the default.
+
+    vendor_cost is what WE PAY the vendor per unit.
+    This is completely separate from tier pricing (what we CHARGE clients).
+    When POs are auto-generated, each PO line pulls this cost automatically.
     """
 
     __tablename__ = "sku_vendors"
@@ -108,6 +112,10 @@ class SKUVendor(Base):
         ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    vendor_cost: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 2), nullable=True,
+        comment="What we pay the vendor per unit (separate from tier pricing which is what we charge clients)",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

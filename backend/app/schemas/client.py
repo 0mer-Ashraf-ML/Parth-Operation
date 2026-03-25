@@ -13,7 +13,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import ContactType
+from app.models.enums import AddressType, ContactType
 
 
 # ═══════════════════════════════════════════════════════════
@@ -50,6 +50,10 @@ class ClientContactOut(BaseModel):
 # ═══════════════════════════════════════════════════════════
 
 class ClientAddressCreate(BaseModel):
+    address_type: AddressType = Field(
+        AddressType.SHIP_TO,
+        description="SHIP_TO or BILLING",
+    )
     label: str = Field(..., min_length=1, max_length=255, examples=["Main Warehouse"])
     address_line_1: str = Field(..., min_length=1, max_length=255)
     address_line_2: Optional[str] = Field(None, max_length=255)
@@ -61,6 +65,7 @@ class ClientAddressCreate(BaseModel):
 
 
 class ClientAddressUpdate(BaseModel):
+    address_type: Optional[AddressType] = None
     label: Optional[str] = Field(None, min_length=1, max_length=255)
     address_line_1: Optional[str] = Field(None, min_length=1, max_length=255)
     address_line_2: Optional[str] = Field(None, max_length=255)
@@ -74,6 +79,7 @@ class ClientAddressUpdate(BaseModel):
 class ClientAddressOut(BaseModel):
     id: int
     client_id: int
+    address_type: AddressType
     label: str
     address_line_1: str
     address_line_2: Optional[str] = None

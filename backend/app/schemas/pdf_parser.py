@@ -180,6 +180,16 @@ class PDFParseResult(BaseModel):
     )
     matched_client_name: Optional[str] = None
 
+    # ── Auto-created ship-to address on matched client ─────
+    ship_to_address_id: Optional[int] = Field(
+        None,
+        description=(
+            "If a client was matched AND a valid ship-to address was extracted, "
+            "the system auto-creates (or reuses) a ClientAddress and returns its ID here. "
+            "This can be passed directly to SOCreate.ship_to_address_id."
+        ),
+    )
+
     # ── Raw AI output (for debugging / transparency) ───────
     raw_ai_response: Optional[str] = Field(
         None,

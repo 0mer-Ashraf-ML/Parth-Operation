@@ -1,8 +1,17 @@
 """
 Pydantic schemas for Purchase Order and PO Line endpoints.
 
-PO Lines now carry all delivery tracking: status, delivered_qty,
+PO Lines carry all delivery tracking: status, delivered_qty,
 remaining_qty, plus per-line schedule dates.
+
+PO header status is AUTO-DERIVED from line items:
+  • STARTED:   at least one line is not yet DELIVERED.
+  • COMPLETED: ALL lines are DELIVERED.
+PO-level status is NOT manually settable.
+
+unit_cost on PO lines = what we pay the vendor per unit.
+Auto-pulled from SKUVendor.vendor_cost during PO generation.
+Tier pricing (what we charge clients) is NEVER exposed on the PO side.
 
 Naming convention:
   • *Create   – POST request body
@@ -11,6 +20,7 @@ Naming convention:
 """
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -23,12 +33,14 @@ from app.models.enums import POLineStatus, POStatus, ShipmentType
 # ═══════════════════════════════════════════════════════════
 
 class POLineOut(BaseModel):
-    """Response representation of a PO line (includes delivery tracking)."""
+    """Response representation of a PO line (includes delivery tracking + cost)."""
     id: int
     purchase_order_id: int
     so_line_id: int
     sku_id: int
     quantity: int
+    unit_cost: Optional[Decimal] = None
+    line_total: Optional[Decimal] = None  # unit_cost × quantity
     status: POLineStatus
     delivered_qty: int = 0
     remaining_qty: int = 0
@@ -68,14 +80,15 @@ class POGenerateRequest(BaseModel):
 
 
 class POUpdate(BaseModel):
-    """PATCH /purchase-orders/{id} body."""
-    status: Optional[POStatus] = Field(
-        None,
-        description="Move PO to next status (validated against flow)",
-    )
+    """
+    PATCH /purchase-orders/{id} body.
+
+    NOTE: PO header status is auto-derived from line items and cannot
+    be changed manually.  Only shipment_type and dates are editable.
+    """
     shipment_type: Optional[ShipmentType] = Field(
         None,
-        description="Change shipment type (only while IN_PRODUCTION)",
+        description="Change shipment type (only while STARTED / IN_PRODUCTION)",
     )
     expected_ship_date: Optional[date] = Field(
         None,
@@ -103,6 +116,7 @@ class POListOut(BaseModel):
     line_count: int = 0
     total_quantity: int = 0
     total_delivered: int = 0
+    total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -121,6 +135,9 @@ class PODetailOut(BaseModel):
     status: POStatus
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    total_quantity: int = 0
+    total_delivered: int = 0
+    total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
     is_deletable: bool = False
     created_at: datetime
     updated_at: datetime

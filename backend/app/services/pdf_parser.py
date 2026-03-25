@@ -29,7 +29,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.exceptions import BadRequestException
-from app.models.client import Client
+from app.models.client import Client, ClientAddress
+from app.models.enums import AddressType
 from app.models.sku import SKU
 from app.schemas.pdf_parser import (
     ParsedAddress,
@@ -423,6 +424,13 @@ def build_parse_result(
         ["address_line_1", "address_line_2", "city", "state", "zip_code", "country"]
     }) if any(bill_to_raw.values()) else None
 
+    # ── Auto-create ship-to address on matched client ───────
+    ship_to_address_id: Optional[int] = None
+    if matched_client_id and ship_to:
+        ship_to_address_id = _auto_create_ship_to_address(
+            db, matched_client_id, ship_to, original_filename,
+        )
+
     # ── Build final result ─────────────────────────────────
     parsed_line_items = []
     for item in line_items:
@@ -462,7 +470,70 @@ def build_parse_result(
         line_items=parsed_line_items,
         matched_client_id=matched_client_id,
         matched_client_name=matched_client_name,
+        ship_to_address_id=ship_to_address_id,
         raw_ai_response=raw_ai_text,
         parsing_notes=parsed_data.get("parsing_notes"),
         confidence_score=parsed_data.get("confidence_score"),
     )
+
+
+# ═══════════════════════════════════════════════════════════
+#  AUTO-CREATE SHIP-TO ADDRESS ON CLIENT
+# ═══════════════════════════════════════════════════════════
+
+def _auto_create_ship_to_address(
+    db: Session,
+    client_id: int,
+    ship_to: ParsedAddress,
+    source_filename: str,
+) -> Optional[int]:
+    """
+    If the extracted ship-to address has at least address_line_1 and city,
+    look for an existing address on the client that matches.
+
+    • If found  → return existing address ID (no duplicate).
+    • If not    → create a new ClientAddress with address_type=SHIP_TO
+                  and return its ID.
+    • If data is too sparse → return None.
+    """
+    # Need at minimum address_line_1 and city to create
+    if not ship_to.address_line_1 or not ship_to.city:
+        logger.info("Ship-to address too sparse to auto-create – skipping")
+        return None
+
+    # Check for existing address with same line1 + city + zip on this client
+    existing = db.execute(
+        select(ClientAddress).where(
+            ClientAddress.client_id == client_id,
+            ClientAddress.address_line_1.ilike(ship_to.address_line_1.strip()),
+            ClientAddress.city.ilike(ship_to.city.strip()),
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        logger.info(
+            f"Reusing existing client address id={existing.id} for client {client_id}"
+        )
+        return existing.id
+
+    # Create new address
+    new_addr = ClientAddress(
+        client_id=client_id,
+        address_type=AddressType.SHIP_TO,
+        label=f"Ship To (from {source_filename})",
+        address_line_1=ship_to.address_line_1.strip(),
+        address_line_2=(ship_to.address_line_2 or "").strip() or None,
+        city=ship_to.city.strip(),
+        state=(ship_to.state or "").strip() or "N/A",
+        zip_code=(ship_to.zip_code or "").strip() or "N/A",
+        country=(ship_to.country or "US").strip(),
+        is_default=False,
+    )
+    db.add(new_addr)
+    db.flush()  # Get the ID without committing (caller's transaction)
+
+    logger.info(
+        f"Auto-created ship-to address id={new_addr.id} on client {client_id} "
+        f"from PDF '{source_filename}'"
+    )
+    return new_addr.id

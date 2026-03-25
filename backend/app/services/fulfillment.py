@@ -7,6 +7,8 @@ Key business rules:
   • When an event is recorded:
       1. The PO line's delivered_qty is recalculated (SUM of all events).
       2. A guard ensures delivered_qty never exceeds quantity.
+      3. PO header status is auto-derived (STARTED/COMPLETED).
+      4. Parent SO status is auto-derived (PENDING/STARTED/PARTIALLY_COMPLETED/COMPLETED).
   • Permission scoping:
       - Admin: can record events for any PO line.
       - AM: can record events only for POs whose SO belongs to assigned clients.
@@ -25,6 +27,7 @@ from app.models.enums import EventSource, UserRole
 from app.models.fulfillment import FulfillmentEvent
 from app.models.purchase_order import POLine, PurchaseOrder
 from app.models.sales_order import SalesOrder
+from app.models.sku import SKU
 from app.schemas.auth import CurrentUser
 from app.schemas.fulfillment import FulfillmentEventCreate
 
@@ -46,6 +49,8 @@ def record_fulfillment_event(
       2. Guard: new total delivered_qty must not exceed quantity.
       3. Create the immutable FulfillmentEvent row.
       4. Update PO line's delivered_qty.
+      5. Auto-adjust inventory.
+      6. Auto-derive PO header and SO status.
     """
     # 1. Load PO line with its parent PO + vendor + SO
     po_line = db.execute(
@@ -91,7 +96,24 @@ def record_fulfillment_event(
 
     # 4. Update PO line's delivered_qty (denormalized counter)
     po_line.delivered_qty = new_total
+
+    # 5. Auto-adjust inventory: increment when goods received from vendor
+    _adjust_inventory(db, po_line.sku_id, +data.quantity)
+
+    # 6. Auto-derive PO header and SO status
     db.flush()
+    from app.services.purchase_order import (
+        derive_and_persist_po_status,
+        derive_and_persist_so_status,
+    )
+    po = db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.lines))
+        .where(PurchaseOrder.id == po_line.purchase_order_id)
+    ).scalar_one()
+    po_changed = derive_and_persist_po_status(db, po)
+    if po_changed:
+        derive_and_persist_so_status(db, po.sales_order_id)
 
     db.commit()
     db.refresh(event)
@@ -312,6 +334,23 @@ def _assert_can_access_po(
         raise ForbiddenException("You can only access your own Purchase Orders")
 
     raise ForbiddenException("Access denied")
+
+
+def _adjust_inventory(db: Session, sku_id: int, qty_delta: int) -> None:
+    """
+    Adjust SKU.inventory_count by qty_delta (positive = increment, negative = decrement).
+
+    Only applies to SKUs where track_inventory = True.
+    Runs inside the caller's transaction — no separate commit.
+    """
+    sku = db.execute(
+        select(SKU).where(SKU.id == sku_id)
+    ).scalar_one_or_none()
+
+    if sku is None or not sku.track_inventory:
+        return  # nothing to adjust
+
+    sku.inventory_count = sku.inventory_count + qty_delta
 
 
 def _build_overview(po: PurchaseOrder) -> dict:

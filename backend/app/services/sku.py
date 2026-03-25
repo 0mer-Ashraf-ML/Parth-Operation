@@ -23,6 +23,7 @@ from app.schemas.sku import (
     SKUCreate,
     SKUUpdate,
     SKUVendorCreate,
+    SKUVendorUpdate,
     TierPricingCreate,
     TierPricingUpdate,
 )
@@ -312,8 +313,41 @@ def add_sku_vendor(db: Session, sku_id: int, data: SKUVendorCreate) -> SKUVendor
         sku_id=sku.id,
         vendor_id=data.vendor_id,
         is_default=data.is_default,
+        vendor_cost=data.vendor_cost,
     )
     db.add(sv)
+    db.commit()
+    db.refresh(sv)
+    return sv
+
+
+def update_sku_vendor(
+    db: Session, sku_id: int, vendor_id: int, data: SKUVendorUpdate,
+) -> SKUVendor:
+    """Update a SKU-Vendor mapping (vendor_cost, is_default)."""
+    sv = db.execute(
+        select(SKUVendor)
+        .options(selectinload(SKUVendor.vendor))
+        .where(
+            SKUVendor.sku_id == sku_id,
+            SKUVendor.vendor_id == vendor_id,
+        )
+    ).scalar_one_or_none()
+
+    if sv is None:
+        raise NotFoundException(
+            f"Vendor {vendor_id} is not linked to SKU {sku_id}"
+        )
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    # If marking as default, un-default others first
+    if update_data.get("is_default"):
+        _clear_default_sku_vendor(db, sku_id)
+
+    for field, value in update_data.items():
+        setattr(sv, field, value)
+
     db.commit()
     db.refresh(sv)
     return sv

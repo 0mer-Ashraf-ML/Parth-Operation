@@ -8,7 +8,7 @@ Every SQLAlchemy model is imported here so that:
 
 from app.models.base import Base, TimestampMixin  # noqa: F401
 
-from app.models.vendor import Vendor  # noqa: F401
+from app.models.vendor import Vendor, VendorAddress  # noqa: F401
 from app.models.user import User, ClientAssignment  # noqa: F401
 from app.models.client import Client, ClientContact, ClientAddress  # noqa: F401
 from app.models.sku import SKU, SKUVendor, TierPricing  # noqa: F401
