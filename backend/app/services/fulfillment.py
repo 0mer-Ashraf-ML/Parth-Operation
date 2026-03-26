@@ -23,7 +23,7 @@ from app.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
-from app.models.enums import EventSource, UserRole
+from app.models.enums import EventSource, POLineStatus, ShipmentType, UserRole
 from app.models.fulfillment import FulfillmentEvent
 from app.models.purchase_order import POLine, PurchaseOrder
 from app.models.sales_order import SalesOrder
@@ -95,10 +95,20 @@ def record_fulfillment_event(
     db.add(event)
 
     # 4. Update PO line's delivered_qty (denormalized counter)
+    prev_status = po_line.status
+    prev_delivered = current_delivered
     po_line.delivered_qty = new_total
 
     # 5. Auto-adjust inventory: increment when goods received from vendor
     _adjust_inventory(db, po_line.sku_id, +data.quantity)
+
+    # 5b. Align line status with delivered vs ordered qty (drop-ship vs in-house)
+    sync_po_line_status_from_delivered_qty(
+        db,
+        po_line,
+        prev_status=prev_status,
+        prev_delivered=prev_delivered,
+    )
 
     # 6. Auto-derive PO header and SO status
     db.flush()
@@ -111,9 +121,8 @@ def record_fulfillment_event(
         .options(selectinload(PurchaseOrder.lines))
         .where(PurchaseOrder.id == po_line.purchase_order_id)
     ).scalar_one()
-    po_changed = derive_and_persist_po_status(db, po)
-    if po_changed:
-        derive_and_persist_so_status(db, po.sales_order_id)
+    derive_and_persist_po_status(db, po)
+    derive_and_persist_so_status(db, po.sales_order_id)
 
     db.commit()
     db.refresh(event)
@@ -254,13 +263,75 @@ def get_fulfillment_event(
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 
-def _sum_fulfilled_qty(db: Session, po_line_id: int) -> int:
-    """Sum all fulfillment event quantities for a PO line."""
+def sum_fulfillment_qty_for_line(db: Session, po_line_id: int) -> int:
+    """Sum all fulfillment event quantities for a PO line (public for PO line updates)."""
     result = db.execute(
         select(sa_func.coalesce(sa_func.sum(FulfillmentEvent.quantity), 0))
         .where(FulfillmentEvent.po_line_id == po_line_id)
     ).scalar()
     return int(result)
+
+
+def _sum_fulfilled_qty(db: Session, po_line_id: int) -> int:
+    return sum_fulfillment_qty_for_line(db, po_line_id)
+
+
+def sync_po_line_status_from_delivered_qty(
+    db: Session,
+    line: POLine,
+    *,
+    prev_status: POLineStatus,
+    prev_delivered: int,
+) -> None:
+    """
+    Derive PO line status from delivered_qty vs quantity and apply inventory
+    when entering/leaving DELIVERED (drop-ship only for auto-DELIVERED).
+
+    • delivered_qty <= 0  → IN_PRODUCTION
+    • 0 < delivered_qty < quantity → PACKED_AND_SHIPPED
+    • delivered_qty >= quantity:
+        - Drop-ship → DELIVERED
+        - In-house → READY_FOR_PICKUP unless already DELIVERED (admin-confirmed)
+
+    Used after fulfillment events and PATCH delivered_qty only — not for
+    pure manual status transitions.
+    """
+    if line.quantity <= 0:
+        return
+
+    po = line.purchase_order
+    shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
+
+    d, q = line.delivered_qty, line.quantity
+    if d <= 0:
+        new_status = POLineStatus.IN_PRODUCTION
+    elif d < q:
+        new_status = POLineStatus.PACKED_AND_SHIPPED
+    elif shipment == ShipmentType.IN_HOUSE:
+        new_status = (
+            POLineStatus.DELIVERED
+            if prev_status == POLineStatus.DELIVERED
+            else POLineStatus.READY_FOR_PICKUP
+        )
+    else:
+        new_status = POLineStatus.DELIVERED
+
+    need_inv_leave = (
+        prev_status == POLineStatus.DELIVERED and new_status != POLineStatus.DELIVERED
+    )
+    need_inv_enter = (
+        new_status == POLineStatus.DELIVERED and prev_status != POLineStatus.DELIVERED
+    )
+    if line.status == new_status and not need_inv_leave and not need_inv_enter:
+        return
+
+    if need_inv_leave:
+        _adjust_inventory(db, line.sku_id, +prev_delivered)
+
+    if need_inv_enter:
+        _adjust_inventory(db, line.sku_id, -line.delivered_qty)
+
+    line.status = new_status
 
 
 def _get_po_line_or_404(db: Session, po_line_id: int) -> POLine:

@@ -11,8 +11,8 @@ from app.models.enums import UserRole
 
 class LoginRequest(BaseModel):
     """POST /auth/login body."""
-    email: str = Field(..., examples=["admin@gmail.com"])
-    password: str = Field(..., min_length=1, examples=["secret123"])
+    email: str = Field(..., examples=["admin@dpm.com"])
+    password: str = Field(..., min_length=1, examples=["admin123"])
 
 
 # ── Response schemas ───────────────────────────────────────

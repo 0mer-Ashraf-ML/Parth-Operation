@@ -23,7 +23,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import POLineStatus, POStatus, ShipmentType
 
@@ -57,10 +57,15 @@ class POLineOut(BaseModel):
 
 
 class POLineUpdate(BaseModel):
-    """Vendor / Admin can update per-line dates and status."""
+    """Vendor / Admin can update per-line dates, status, and delivered quantity."""
     status: Optional[POLineStatus] = Field(
         None,
         description="Update per-line status (validated against shipment type flow)",
+    )
+    delivered_qty: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Running delivered quantity; line status is derived from this vs quantity",
     )
     due_date: Optional[date] = None
     expected_ship_date: Optional[date] = None
@@ -83,9 +88,13 @@ class POUpdate(BaseModel):
     """
     PATCH /purchase-orders/{id} body.
 
-    NOTE: PO header status is auto-derived from line items and cannot
-    be changed manually.  Only shipment_type and dates are editable.
+    Header status is normally derived from lines; you may set status to
+    COMPLETED to close the PO and mark every line fully delivered.
     """
+    status: Optional[POStatus] = Field(
+        None,
+        description="Set to completed to mark all lines delivered and close the PO",
+    )
     shipment_type: Optional[ShipmentType] = Field(
         None,
         description="Change shipment type (only while STARTED / IN_PRODUCTION)",
@@ -98,6 +107,13 @@ class POUpdate(BaseModel):
         None,
         description="When goods are expected to arrive",
     )
+
+    @field_validator("status")
+    @classmethod
+    def only_completed_status(cls, v: Optional[POStatus]) -> Optional[POStatus]:
+        if v is not None and v != POStatus.COMPLETED:
+            raise ValueError("Only 'completed' may be set on PO header via PATCH")
+        return v
 
 
 class POListOut(BaseModel):

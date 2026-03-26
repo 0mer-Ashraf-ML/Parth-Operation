@@ -34,27 +34,39 @@ from app.models.vendor import Vendor
 from app.schemas.auth import CurrentUser
 from app.services.permissions import PermissionService
 
-# ── Inventory helper (shared with fulfillment service) ────
-from app.services.fulfillment import _adjust_inventory
+# ── Inventory + line sync (shared with fulfillment service) ────
+from app.services.fulfillment import (
+    _adjust_inventory,
+    sum_fulfillment_qty_for_line,
+    sync_po_line_status_from_delivered_qty,
+)
 
 
 # ═══════════════════════════════════════════════════════════
 #  PO / SO STATUS DERIVATION
 # ═══════════════════════════════════════════════════════════
 
+def _line_fully_delivered(line: POLine) -> bool:
+    """True when ordered qty is fully delivered (by quantity and status)."""
+    if line.quantity <= 0:
+        return True
+    return (
+        line.delivered_qty >= line.quantity
+        and line.status == POLineStatus.DELIVERED
+    )
+
+
 def derive_po_status(po: PurchaseOrder) -> POStatus:
     """
     Derive PO header status from its lines.
 
-    • If ALL lines are DELIVERED → COMPLETED
+    • If ALL lines are fully delivered → COMPLETED
     • Otherwise → STARTED
     """
     if not po.lines:
         return POStatus.STARTED
 
-    all_delivered = all(
-        line.status == POLineStatus.DELIVERED for line in po.lines
-    )
+    all_delivered = all(_line_fully_delivered(line) for line in po.lines)
     return POStatus.COMPLETED if all_delivered else POStatus.STARTED
 
 
@@ -71,28 +83,36 @@ def derive_and_persist_po_status(db: Session, po: PurchaseOrder) -> bool:
 
 def derive_so_status(db: Session, so_id: int) -> SOStatus:
     """
-    Derive SO status from its POs.
+    Derive SO status from PO lines (delivery progress).
 
     • No POs → PENDING
-    • All POs COMPLETED → COMPLETED
-    • Some POs COMPLETED, some not → PARTIALLY_COMPLETED
-    • POs exist but none COMPLETED → STARTED
+    • Any line has delivered_qty > 0 but not every line fully delivered → PARTIALLY_COMPLETED
+    • All lines (with qty > 0) fully delivered → COMPLETED
+    • POs exist but nothing delivered yet → STARTED
     """
     pos = db.execute(
-        select(PurchaseOrder).where(PurchaseOrder.sales_order_id == so_id)
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.lines))
+        .where(PurchaseOrder.sales_order_id == so_id)
     ).scalars().all()
 
     if not pos:
         return SOStatus.PENDING
 
-    completed_count = sum(1 for po in pos if po.status == POStatus.COMPLETED)
-
-    if completed_count == len(pos):
-        return SOStatus.COMPLETED
-    elif completed_count > 0:
-        return SOStatus.PARTIALLY_COMPLETED
-    else:
+    lines_with_qty = [
+        ln for po in pos for ln in (po.lines or []) if ln.quantity > 0
+    ]
+    if not lines_with_qty:
         return SOStatus.STARTED
+
+    any_delivered = any(ln.delivered_qty > 0 for ln in lines_with_qty)
+    all_fully = all(_line_fully_delivered(ln) for ln in lines_with_qty)
+
+    if all_fully:
+        return SOStatus.COMPLETED
+    if any_delivered:
+        return SOStatus.PARTIALLY_COMPLETED
+    return SOStatus.STARTED
 
 
 def derive_and_persist_so_status(db: Session, so_id: int) -> None:
@@ -329,14 +349,39 @@ def update_purchase_order(
     """
     Update PO fields.
 
-    NOTE: PO header status is auto-derived and CANNOT be set manually.
-    Only shipment_type and dates are editable.
-
-    • shipment_type      – only changeable while STARTED.
-    • expected_ship_date – free update.
-    • expected_arrival_date – free update.
+    • shipment_type      – only changeable while not COMPLETED.
+    • expected_ship_date / expected_arrival_date – free update.
+    • status=COMPLETED  – marks the PO complete: every line gets delivered_qty
+      set to full quantity, status DELIVERED, remaining 0 (inventory adjusted).
     """
     po = get_purchase_order(db, current_user, po_id)
+
+    # ── Mark PO complete (all lines delivered) ───────────────
+    if kwargs.get("status") is not None:
+        if kwargs["status"] != POStatus.COMPLETED:
+            raise BadRequestException(
+                "PO header status is derived except you may set status to COMPLETED "
+                "to close the PO and mark all lines fully delivered."
+            )
+        if po.status != POStatus.COMPLETED:
+            po = db.execute(
+                select(PurchaseOrder)
+                .options(selectinload(PurchaseOrder.lines))
+                .where(PurchaseOrder.id == po_id)
+            ).scalar_one()
+            for line in po.lines or []:
+                old_st = line.status
+                old_d = line.delivered_qty
+                gap = max(0, line.quantity - old_d)
+                if gap:
+                    _adjust_inventory(db, line.sku_id, +gap)
+                line.delivered_qty = line.quantity
+                if old_st != POLineStatus.DELIVERED:
+                    _adjust_inventory(db, line.sku_id, -line.quantity)
+                line.status = POLineStatus.DELIVERED
+            db.flush()
+            derive_and_persist_po_status(db, po)
+            derive_and_persist_so_status(db, po.sales_order_id)
 
     # ── Shipment type change ───────────────────────────────
     if "shipment_type" in kwargs and kwargs["shipment_type"] is not None:
@@ -388,6 +433,34 @@ def update_po_line(
             f"PO Line id={line_id} not found on PO {po.po_number}"
         )
 
+    # ── Per-line delivered quantity (vendor / admin) ──────
+    if "delivered_qty" in kwargs and kwargs["delivered_qty"] is not None:
+        new_d = kwargs["delivered_qty"]
+        if new_d < 0:
+            raise BadRequestException("delivered_qty cannot be negative")
+        if new_d > line.quantity:
+            raise BadRequestException(
+                f"delivered_qty ({new_d}) cannot exceed line quantity ({line.quantity})"
+            )
+        events_sum = sum_fulfillment_qty_for_line(db, line.id)
+        if new_d < events_sum:
+            raise BadRequestException(
+                f"delivered_qty ({new_d}) cannot be less than recorded fulfillment "
+                f"events total ({events_sum})"
+            )
+        old_st = line.status
+        old_d = line.delivered_qty
+        delta = new_d - old_d
+        if delta:
+            _adjust_inventory(db, line.sku_id, +delta)
+            line.delivered_qty = new_d
+            sync_po_line_status_from_delivered_qty(
+                db,
+                line,
+                prev_status=old_st,
+                prev_delivered=old_d,
+            )
+
     # ── Per-line status transition ────────────────────────
     if "status" in kwargs and kwargs["status"] is not None:
         new_status = kwargs["status"]
@@ -407,6 +480,14 @@ def update_po_line(
                 )
 
             old_status = line.status
+            if (
+                new_status == POLineStatus.DELIVERED
+                and line.delivered_qty < line.quantity
+            ):
+                gap = line.quantity - line.delivered_qty
+                _adjust_inventory(db, line.sku_id, +gap)
+                line.delivered_qty = line.quantity
+
             line.status = new_status
 
             # Auto-adjust inventory: decrement when PO line reaches DELIVERED
@@ -428,11 +509,8 @@ def update_po_line(
         .options(selectinload(PurchaseOrder.lines))
         .where(PurchaseOrder.id == po_id)
     ).scalar_one()
-    po_changed = derive_and_persist_po_status(db, po)
-
-    # If PO status changed, also re-derive SO status
-    if po_changed:
-        derive_and_persist_so_status(db, po.sales_order_id)
+    derive_and_persist_po_status(db, po)
+    derive_and_persist_so_status(db, po.sales_order_id)
 
     db.commit()
     db.refresh(line)

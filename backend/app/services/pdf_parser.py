@@ -20,6 +20,7 @@ The prompt is carefully engineered to:
 
 import json
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -39,6 +40,41 @@ from app.schemas.pdf_parser import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CUSTOMER_EMAIL_RE = re.compile(
+    r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+    re.IGNORECASE,
+)
+
+
+def _normalize_customer_contact_fields(
+    contact: Optional[str],
+    email: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Ensure emails land in customer_email, not embedded in customer_contact
+    (e.g. 'Jane Doe <jane@acme.com>' or 'jane@acme.com').
+    """
+    c = (contact or "").strip() or None
+    e = (email or "").strip() or None
+
+    if c:
+        m = _CUSTOMER_EMAIL_RE.search(c)
+        if m:
+            found = m.group(0)
+            if not e:
+                e = found
+            remainder = _CUSTOMER_EMAIL_RE.sub("", c)
+            remainder = remainder.strip(" \t\n\r,;|<>()[]")
+            remainder = re.sub(r"\s+", " ", remainder).strip()
+            c = remainder or None
+
+    if e:
+        m2 = _CUSTOMER_EMAIL_RE.search(e)
+        e = m2.group(0).strip() if m2 else None
+
+    return c, e
+
 
 # ── Configure Gemini ──────────────────────────────────────
 _model = None
@@ -78,6 +114,8 @@ IMPORTANT RULES:
     Example: if a cell shows "PO-SKU-A1-21002" on one line and "1" on the next, the sku_code is "PO-SKU-A1-210021" (no space).
     Similarly "FUL-SKU-V2-2200" + "48" = "FUL-SKU-V2-220048".
     The same rule applies to the order_number field — remove any accidental internal spaces or line breaks.
+12. Ensure the JSON is COMPLETE and properly closed. Do not truncate output.
+13. Do not stop mid-object. Always close all brackets and arrays.
 
 Return ONLY a valid JSON object with this EXACT structure (no markdown, no code fences, no explanation):
 
@@ -86,8 +124,8 @@ Return ONLY a valid JSON object with this EXACT structure (no markdown, no code 
   "order_date": "YYYY-MM-DD or null",
   "due_date": "YYYY-MM-DD or null - overall delivery/due date",
   "customer_name": "string or null - the buyer/customer company name",
-  "customer_contact": "string or null - contact person name",
-  "customer_email": "string or null",
+  "customer_contact": "string or null - contact person name ONLY (no email here)",
+  "customer_email": "string or null - email only; never duplicate inside customer_contact",
   "customer_phone": "string or null",
   "ship_to_address": {
     "address_line_1": "string or null",
@@ -164,7 +202,6 @@ def parse_pdf_with_gemini(pdf_bytes: bytes, filename: str) -> dict:
             ],
             generation_config=genai.GenerationConfig(
                 temperature=0.1,  # Low temperature for consistent extraction
-                max_output_tokens=8192,
             ),
         )
     except Exception as e:
@@ -414,6 +451,11 @@ def build_parse_result(
     customer_name = parsed_data.get("customer_name")
     matched_client_id, matched_client_name = _match_client(db, customer_name)
 
+    cust_contact, cust_email = _normalize_customer_contact_fields(
+        parsed_data.get("customer_contact"),
+        parsed_data.get("customer_email"),
+    )
+
     # ── Parse addresses ────────────────────────────────────
     ship_to_raw = parsed_data.get("ship_to_address") or {}
     ship_to = ParsedAddress(**{
@@ -460,8 +502,8 @@ def build_parse_result(
         order_date=_safe_date(parsed_data.get("order_date")),
         due_date=_safe_date(parsed_data.get("due_date")),
         customer_name=customer_name,
-        customer_contact=parsed_data.get("customer_contact"),
-        customer_email=parsed_data.get("customer_email"),
+        customer_contact=cust_contact,
+        customer_email=cust_email,
         customer_phone=parsed_data.get("customer_phone"),
         ship_to_address=ship_to,
         bill_to_address=bill_to,
