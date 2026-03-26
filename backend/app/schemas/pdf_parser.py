@@ -189,6 +189,14 @@ class PDFParseResult(BaseModel):
             "This can be passed directly to SOCreate.ship_to_address_id."
         ),
     )
+    billing_address_id: Optional[int] = Field(
+        None,
+        description=(
+            "If a client was matched AND a valid bill-to address was extracted, "
+            "a BILLING ClientAddress is created or reused; ID returned here. "
+            "If the client had no billing_address_id set, it is pointed at this row."
+        ),
+    )
 
     # ── Raw AI output (for debugging / transparency) ───────
     raw_ai_response: Optional[str] = Field(

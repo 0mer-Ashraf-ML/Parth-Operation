@@ -87,8 +87,10 @@ def get_sales_order(
         select(SalesOrder)
         .options(
             selectinload(SalesOrder.client),
+            selectinload(SalesOrder.ship_to_address),
             selectinload(SalesOrder.lines).selectinload(SOLine.sku),
             selectinload(SalesOrder.creator),
+            selectinload(SalesOrder.purchase_orders),
         )
         .where(SalesOrder.id == so_id)
     ).scalar_one_or_none()
@@ -157,6 +159,7 @@ def create_sales_order(
         order_number=data.order_number,
         client_id=data.client_id,
         ship_to_address_id=data.ship_to_address_id,
+        ship_to_contact_name=data.ship_to_contact_name,
         order_date=data.order_date,
         original_pdf_url=data.original_pdf_url,
         notes=data.notes,

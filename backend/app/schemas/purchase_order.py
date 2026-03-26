@@ -26,6 +26,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import POLineStatus, POStatus, ShipmentType
+from app.schemas.client import ClientAddressOut
 
 
 # ═══════════════════════════════════════════════════════════
@@ -127,6 +128,8 @@ class POListOut(BaseModel):
     client_name: Optional[str] = None
     shipment_type: ShipmentType
     status: POStatus
+    ship_to_address: Optional[ClientAddressOut] = None
+    ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
     line_count: int = 0
@@ -149,6 +152,8 @@ class PODetailOut(BaseModel):
     client_name: Optional[str] = None
     shipment_type: ShipmentType
     status: POStatus
+    ship_to_address: Optional[ClientAddressOut] = None
+    ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
     total_quantity: int = 0

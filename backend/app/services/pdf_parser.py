@@ -476,6 +476,17 @@ def build_parse_result(
             db, matched_client_id, ship_to, original_filename,
         )
 
+    # ── Auto-create billing address on matched client ───────
+    billing_address_id: Optional[int] = None
+    if matched_client_id and bill_to:
+        billing_address_id = _auto_create_billing_address(
+            db, matched_client_id, bill_to, original_filename,
+        )
+        if billing_address_id is not None:
+            cl = db.get(Client, matched_client_id)
+            if cl is not None and cl.billing_address_id is None:
+                cl.billing_address_id = billing_address_id
+
     # ── Build final result ─────────────────────────────────
     parsed_line_items = []
     for item in line_items:
@@ -516,6 +527,7 @@ def build_parse_result(
         matched_client_id=matched_client_id,
         matched_client_name=matched_client_name,
         ship_to_address_id=ship_to_address_id,
+        billing_address_id=billing_address_id,
         raw_ai_response=raw_ai_text,
         parsing_notes=parsed_data.get("parsing_notes"),
         confidence_score=parsed_data.get("confidence_score"),
@@ -552,6 +564,7 @@ def _auto_create_ship_to_address(
         select(ClientAddress)
         .where(
             ClientAddress.client_id == client_id,
+            ClientAddress.address_type == AddressType.SHIP_TO,
             ClientAddress.address_line_1.ilike(ship_to.address_line_1.strip()),
             ClientAddress.city.ilike(ship_to.city.strip()),
         )
@@ -561,7 +574,7 @@ def _auto_create_ship_to_address(
 
     if existing:
         logger.info(
-            f"Reusing existing client address id={existing.id} for client {client_id}"
+            f"Reusing existing ship-to address id={existing.id} for client {client_id}"
         )
         return existing.id
 
@@ -583,6 +596,59 @@ def _auto_create_ship_to_address(
 
     logger.info(
         f"Auto-created ship-to address id={new_addr.id} on client {client_id} "
+        f"from PDF '{source_filename}'"
+    )
+    return new_addr.id
+
+
+def _auto_create_billing_address(
+    db: Session,
+    client_id: int,
+    bill_to: ParsedAddress,
+    source_filename: str,
+) -> Optional[int]:
+    """
+    If bill-to has line1 + city, reuse or create ClientAddress (BILLING)
+    for the matched client (same line1+city match among BILLING rows only).
+    """
+    if not bill_to.address_line_1 or not bill_to.city:
+        logger.info("Bill-to address too sparse to auto-create – skipping")
+        return None
+
+    existing = db.scalars(
+        select(ClientAddress)
+        .where(
+            ClientAddress.client_id == client_id,
+            ClientAddress.address_type == AddressType.BILLING,
+            ClientAddress.address_line_1.ilike(bill_to.address_line_1.strip()),
+            ClientAddress.city.ilike(bill_to.city.strip()),
+        )
+        .order_by(ClientAddress.id.asc())
+        .limit(1)
+    ).first()
+
+    if existing:
+        logger.info(
+            f"Reusing existing billing address id={existing.id} for client {client_id}"
+        )
+        return existing.id
+
+    new_addr = ClientAddress(
+        client_id=client_id,
+        address_type=AddressType.BILLING,
+        label=f"Billing (from {source_filename})",
+        address_line_1=bill_to.address_line_1.strip(),
+        address_line_2=(bill_to.address_line_2 or "").strip() or None,
+        city=bill_to.city.strip(),
+        state=(bill_to.state or "").strip() or "N/A",
+        zip_code=(bill_to.zip_code or "").strip() or "N/A",
+        country=(bill_to.country or "US").strip(),
+        is_default=False,
+    )
+    db.add(new_addr)
+    db.flush()
+    logger.info(
+        f"Auto-created billing address id={new_addr.id} on client {client_id} "
         f"from PDF '{source_filename}'"
     )
     return new_addr.id

@@ -282,6 +282,9 @@ def list_purchase_orders(
         .options(
             selectinload(PurchaseOrder.vendor),
             selectinload(PurchaseOrder.sales_order).selectinload(SalesOrder.client),
+            selectinload(PurchaseOrder.sales_order).selectinload(
+                SalesOrder.ship_to_address,
+            ),
             selectinload(PurchaseOrder.lines),
         )
     )
@@ -328,6 +331,9 @@ def get_purchase_order(
         .options(
             selectinload(PurchaseOrder.vendor),
             selectinload(PurchaseOrder.sales_order).selectinload(SalesOrder.client),
+            selectinload(PurchaseOrder.sales_order).selectinload(
+                SalesOrder.ship_to_address,
+            ),
             selectinload(PurchaseOrder.lines).selectinload(POLine.sku),
         )
         .where(PurchaseOrder.id == po_id)

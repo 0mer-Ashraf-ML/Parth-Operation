@@ -69,6 +69,11 @@ class SalesOrder(Base, TimestampMixin):
     ship_to_address_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("client_addresses.id"), nullable=True,
     )
+    ship_to_contact_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Delivery / ship-to contact person name (e.g. from customer PO)",
+    )
     status: Mapped[SOStatus] = mapped_column(
         SAEnum(SOStatus, name="so_status", create_constraint=True),
         nullable=False,

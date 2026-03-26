@@ -118,6 +118,10 @@ class ClientUpdate(BaseModel):
     auto_invoice: Optional[bool] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+    billing_address_id: Optional[int] = Field(
+        None,
+        description="Canonical invoice billing address (must be a BILLING address on this client)",
+    )
 
 
 class ClientListOut(BaseModel):
@@ -144,6 +148,8 @@ class ClientDetailOut(BaseModel):
     auto_invoice: bool
     notes: Optional[str] = None
     is_active: bool
+    billing_address_id: Optional[int] = None
+    billing_address: Optional[ClientAddressOut] = None
     created_at: datetime
     updated_at: datetime
     contacts: list[ClientContactOut] = []

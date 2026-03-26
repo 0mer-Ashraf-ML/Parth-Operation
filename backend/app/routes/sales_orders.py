@@ -29,6 +29,7 @@ from app.dependencies import require_admin, require_admin_or_am
 from app.models.enums import SOStatus
 from app.models.sales_order import SOLine
 from app.schemas.auth import CurrentUser
+from app.schemas.client import ClientAddressOut
 from app.schemas.sales_order import (
     SOCreate,
     SODetailOut,
@@ -225,12 +226,20 @@ def _so_to_detail(so) -> dict:
     has_pos = bool(so.purchase_orders) if hasattr(so, "purchase_orders") else False
     is_deletable = (so.status == SOStatus.PENDING) and not has_pos
 
+    ship_to = (
+        ClientAddressOut.model_validate(so.ship_to_address)
+        if so.ship_to_address is not None
+        else None
+    )
+
     return SODetailOut(
         id=so.id,
         order_number=so.order_number,
         client_id=so.client_id,
         client_name=so.client.company_name if so.client else None,
         ship_to_address_id=so.ship_to_address_id,
+        ship_to_address=ship_to,
+        ship_to_contact_name=so.ship_to_contact_name,
         status=so.status,
         payment_status=so.payment_status,
         order_date=so.order_date,

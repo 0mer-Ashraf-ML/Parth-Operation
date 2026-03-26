@@ -8,7 +8,8 @@ layer thin and focused on HTTP concerns.
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.exceptions import ConflictException, NotFoundException
+from app.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.models.enums import AddressType
 from app.models.client import Client, ClientAddress, ClientContact
 from app.schemas.auth import CurrentUser
 from app.schemas.client import (
@@ -59,7 +60,11 @@ def get_client(db: Session, current_user: CurrentUser, client_id: int) -> Client
     """
     client = db.execute(
         select(Client)
-        .options(selectinload(Client.contacts), selectinload(Client.addresses))
+        .options(
+            selectinload(Client.contacts),
+            selectinload(Client.addresses),
+            selectinload(Client.billing_address),
+        )
         .where(Client.id == client_id)
     ).scalar_one_or_none()
 
@@ -119,6 +124,11 @@ def create_client(db: Session, current_user: CurrentUser, data: ClientCreate) ->
         )
 
     db.add(client)
+    db.flush()
+    for addr in client.addresses:
+        if addr.address_type == AddressType.BILLING and client.billing_address_id is None:
+            client.billing_address_id = addr.id
+            break
     db.commit()
     db.refresh(client)
     return client
@@ -136,6 +146,22 @@ def update_client(
     client = get_client(db, current_user, client_id)
 
     update_data = data.model_dump(exclude_unset=True)
+
+    if "billing_address_id" in update_data:
+        bid = update_data["billing_address_id"]
+        if bid is not None:
+            addr = db.execute(
+                select(ClientAddress).where(ClientAddress.id == bid)
+            ).scalar_one_or_none()
+            if addr is None or addr.client_id != client_id:
+                raise BadRequestException(
+                    "billing_address_id must reference an address that belongs to this client"
+                )
+            if addr.address_type != AddressType.BILLING:
+                raise BadRequestException(
+                    "billing_address_id must be an address with type BILLING"
+                )
+
     for field, value in update_data.items():
         setattr(client, field, value)
 
@@ -262,6 +288,11 @@ def add_address(
         is_default=data.is_default,
     )
     db.add(address)
+    db.flush()
+    if data.address_type == AddressType.BILLING:
+        client_row = db.get(Client, client_id)
+        if client_row is not None and client_row.billing_address_id is None:
+            client_row.billing_address_id = address.id
     db.commit()
     db.refresh(address)
     return address

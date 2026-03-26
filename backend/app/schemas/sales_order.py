@@ -26,6 +26,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.models.enums import SOPaymentStatus, SOStatus
+from app.schemas.client import ClientAddressOut
 
 
 # ═══════════════════════════════════════════════════════════
@@ -92,6 +93,11 @@ class SOCreate(BaseModel):
     )
     client_id: int
     ship_to_address_id: Optional[int] = None
+    ship_to_contact_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Delivery contact name (e.g. from customer PO / PDF parse)",
+    )
     order_date: Optional[date] = Field(
         None, description="Date the customer placed the order (from their PO)",
     )
@@ -108,6 +114,7 @@ class SOUpdate(BaseModel):
     """PATCH /sales-orders/{id} body.  Only include fields you want to change."""
     order_number: Optional[str] = Field(None, min_length=1, max_length=100)
     ship_to_address_id: Optional[int] = None
+    ship_to_contact_name: Optional[str] = Field(None, max_length=255)
     order_date: Optional[date] = None
     # NOTE: order-level due_date removed – use per-line due dates instead
     notes: Optional[str] = None
@@ -136,6 +143,8 @@ class SODetailOut(BaseModel):
     client_id: int
     client_name: Optional[str] = None
     ship_to_address_id: Optional[int] = None
+    ship_to_address: Optional[ClientAddressOut] = None
+    ship_to_contact_name: Optional[str] = None
     status: SOStatus
     payment_status: SOPaymentStatus
     order_date: Optional[date] = None

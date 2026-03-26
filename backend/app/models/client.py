@@ -61,12 +61,29 @@ class Client(Base, TimestampMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Single invoice billing address (separate from ship-to rows in `addresses`)
+    billing_address_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("client_addresses.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Canonical billing address for invoices (one per client)",
+    )
+
     # ── Relationships ──────────────────────────────────────
     contacts: Mapped[list["ClientContact"]] = relationship(
         "ClientContact", back_populates="client", cascade="all, delete-orphan",
     )
     addresses: Mapped[list["ClientAddress"]] = relationship(
-        "ClientAddress", back_populates="client", cascade="all, delete-orphan",
+        "ClientAddress",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        foreign_keys="[ClientAddress.client_id]",
+    )
+    billing_address: Mapped[Optional["ClientAddress"]] = relationship(
+        "ClientAddress",
+        foreign_keys=[billing_address_id],
+        primaryjoin="Client.billing_address_id == ClientAddress.id",
+        post_update=True,
     )
     assigned_users: Mapped[list["ClientAssignment"]] = relationship(
         "ClientAssignment", back_populates="client",
@@ -127,7 +144,11 @@ class ClientAddress(Base, TimestampMixin):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # ── Relationships ──────────────────────────────────────
-    client: Mapped["Client"] = relationship("Client", back_populates="addresses")
+    client: Mapped["Client"] = relationship(
+        "Client",
+        back_populates="addresses",
+        foreign_keys=[client_id],
+    )
 
     def __repr__(self) -> str:
         return f"<ClientAddress id={self.id} label={self.label!r} type={self.address_type.value}>"

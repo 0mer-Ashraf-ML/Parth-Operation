@@ -18,6 +18,8 @@ Permission matrix:
     "own"    = Vendor sees only POs addressed to their vendor record.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -27,6 +29,7 @@ from app.dependencies import require_admin, require_admin_or_am, require_any_rol
 from app.models.enums import POStatus, ShipmentType
 from app.models.purchase_order import POLine
 from app.schemas.auth import CurrentUser
+from app.schemas.client import ClientAddressOut
 from app.schemas.purchase_order import (
     PODetailOut,
     POGenerateRequest,
@@ -186,12 +189,27 @@ def update_po_line(
 #  RESPONSE BUILDERS
 # ═══════════════════════════════════════════════════════════
 
+def _so_ship_to_fields(po) -> tuple[Optional[ClientAddressOut], Optional[str]]:
+    """Ship-to address + contact from parent SO (for vendor drop-ship context)."""
+    so = po.sales_order
+    if so is None:
+        return None, None
+    addr = (
+        ClientAddressOut.model_validate(so.ship_to_address)
+        if so.ship_to_address is not None
+        else None
+    )
+    contact = so.ship_to_contact_name
+    return addr, contact
+
+
 def _po_to_list_item(po) -> dict:
     """Build lightweight list-item representation of a PO."""
     line_count = len(po.lines) if po.lines else 0
     total_quantity = sum(ln.quantity for ln in po.lines) if po.lines else 0
     total_delivered = sum(ln.delivered_qty for ln in po.lines) if po.lines else 0
     total_cost = _calc_total_cost(po.lines) if po.lines else None
+    ship_addr, ship_contact = _so_ship_to_fields(po)
 
     return POListOut(
         id=po.id,
@@ -206,6 +224,8 @@ def _po_to_list_item(po) -> dict:
         ),
         shipment_type=po.shipment_type,
         status=po.status,
+        ship_to_address=ship_addr,
+        ship_to_contact_name=ship_contact,
         expected_ship_date=po.expected_ship_date,
         expected_arrival_date=po.expected_arrival_date,
         line_count=line_count,
@@ -223,6 +243,7 @@ def _po_to_detail(po) -> dict:
     total_quantity = sum(ln.quantity for ln in po.lines) if po.lines else 0
     total_delivered = sum(ln.delivered_qty for ln in po.lines) if po.lines else 0
     total_cost = _calc_total_cost(po.lines) if po.lines else None
+    ship_addr, ship_contact = _so_ship_to_fields(po)
 
     return PODetailOut(
         id=po.id,
@@ -237,6 +258,8 @@ def _po_to_detail(po) -> dict:
         ),
         shipment_type=po.shipment_type,
         status=po.status,
+        ship_to_address=ship_addr,
+        ship_to_contact_name=ship_contact,
         expected_ship_date=po.expected_ship_date,
         expected_arrival_date=po.expected_arrival_date,
         total_quantity=total_quantity,
