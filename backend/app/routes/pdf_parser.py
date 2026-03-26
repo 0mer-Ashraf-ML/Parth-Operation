@@ -127,6 +127,8 @@ def upload_and_parse_pdf(
         presigned_url=presigned_url,
         original_filename=file.filename or "unknown.pdf",
     )
+    # Persist auto-created ClientAddress (ship-to) and any flushed state
+    db.commit()
 
     return {"success": True, "data": result.model_dump(mode="json")}
 
@@ -186,6 +188,7 @@ def parse_from_s3(
         presigned_url=presigned_url,
         original_filename=original_filename,
     )
+    db.commit()
 
     return {"success": True, "data": result.model_dump(mode="json")}
 

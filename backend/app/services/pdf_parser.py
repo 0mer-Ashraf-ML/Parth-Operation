@@ -290,13 +290,16 @@ def _match_client(
 
     name_lower = customer_name.strip().lower()
 
-    # Exact match
-    client = db.execute(
-        select(Client).where(
+    # Exact match (case-insensitive); if duplicates exist, pick lowest id
+    client = db.scalars(
+        select(Client)
+        .where(
             Client.is_active.is_(True),
             Client.company_name.ilike(name_lower),
         )
-    ).scalar_one_or_none()
+        .order_by(Client.id.asc())
+        .limit(1)
+    ).first()
 
     if client:
         return client.id, client.company_name
@@ -501,14 +504,18 @@ def _auto_create_ship_to_address(
         logger.info("Ship-to address too sparse to auto-create – skipping")
         return None
 
-    # Check for existing address with same line1 + city + zip on this client
-    existing = db.execute(
-        select(ClientAddress).where(
+    # Check for existing address with same line1 + city on this client.
+    # Duplicates are possible (re-imports, manual data); pick one deterministically.
+    existing = db.scalars(
+        select(ClientAddress)
+        .where(
             ClientAddress.client_id == client_id,
             ClientAddress.address_line_1.ilike(ship_to.address_line_1.strip()),
             ClientAddress.city.ilike(ship_to.city.strip()),
         )
-    ).scalar_one_or_none()
+        .order_by(ClientAddress.id.asc())
+        .limit(1)
+    ).first()
 
     if existing:
         logger.info(
