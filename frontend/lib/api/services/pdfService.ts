@@ -22,6 +22,7 @@ export interface ParsedPdfLineItem {
 }
 
 export interface ParsedPdfAddress {
+  label?: string | null;
   address_line_1: string | null;
   address_line_2: string | null;
   city: string | null;
@@ -52,6 +53,8 @@ export interface ParsedPdfResponse {
   line_items: ParsedPdfLineItem[];
   matched_client_id: number | null;
   matched_client_name: string | null;
+  /** When present, preferred ship-to row on the matched client. */
+  ship_to_address_id?: number | null;
   raw_ai_response: string;
   parsing_notes: string | null;
   confidence_score: string;

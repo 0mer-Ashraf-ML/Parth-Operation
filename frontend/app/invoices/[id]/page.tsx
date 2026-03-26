@@ -30,6 +30,7 @@ import {
   FiHash,
   FiTrendingUp,
 } from "react-icons/fi";
+import { formatAppDate } from "@/lib/formatDate";
 
 type InvoiceStatus = "Draft" | "Sent" | "Viewed" | "Partially Paid" | "Paid" | "Overdue" | "Void";
 
@@ -453,11 +454,7 @@ function InvoiceDetailContent() {
                     Invoice Date
                   </Text>
                   <Text size="3" style={{ color: "var(--color-text-primary)" }}>
-                    {new Date(invoice.invoiceDate).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "long",
-                      day: "numeric",
-                    })}
+                    {formatAppDate(invoice.invoiceDate)}
                   </Text>
                 </Box>
                 <Box>
@@ -470,11 +467,7 @@ function InvoiceDetailContent() {
                       color: isOverdue ? "var(--color-error)" : "var(--color-text-primary)",
                     }}
                   >
-                    {new Date(invoice.dueDate).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "long",
-                      day: "numeric",
-                    })}
+                    {formatAppDate(invoice.dueDate)}
                   </Text>
                 </Box>
                 <Box>
@@ -741,7 +734,7 @@ function InvoiceDetailContent() {
                             ${payment.amount.toFixed(2)}
                           </Text>
                           <Text size="1" style={{ color: "var(--color-text-secondary)" }}>
-                            {new Date(payment.paymentDate).toLocaleDateString()}
+                            {formatAppDate(payment.paymentDate)}
                           </Text>
                         </Flex>
                         <Text size="1" style={{ color: "var(--color-text-secondary)" }}>

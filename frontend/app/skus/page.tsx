@@ -12,6 +12,7 @@ import { FiSearch, FiPlus, FiColumns } from "react-icons/fi";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
 import { TableDataLoader } from "@/components/TableDataLoader";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
 
 interface SKU {
   id: number;
@@ -411,20 +412,7 @@ function SKUsContent() {
         {isLoading ? (
           <TableDataLoader minHeight={500} />
         ) : (
-          <div
-            className="ag-theme-alpine-dark min-w-0"
-            style={{
-              height: "100%",
-              width: "100%",
-              "--ag-background-color": "var(--color-dark-bg-secondary)",
-              "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-              "--ag-odd-row-background-color": "var(--color-dark-bg)",
-              "--ag-row-hover-color": "var(--color-primary-hover)",
-              "--ag-header-foreground-color": "var(--color-text-primary)",
-              "--ag-foreground-color": "var(--color-text-primary)",
-              "--ag-border-color": "var(--color-dark-bg-tertiary)",
-            } as React.CSSProperties}
-          >
+          <AgGridThemeShell>
             <AgGridReact
               rowData={filteredData}
               columnDefs={colDefs}
@@ -440,7 +428,7 @@ function SKUsContent() {
               suppressCellFocus={true}
               rowStyle={{ cursor: "pointer" }}
             />
-          </div>
+          </AgGridThemeShell>
         )}
       </Box>
     </Flex>

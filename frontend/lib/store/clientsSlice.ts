@@ -4,6 +4,15 @@ import * as clientsService from "../api/services/clientsService";
 import * as contactsService from "../api/services/contactsService";
 import * as addressesService from "../api/services/addressesService";
 
+/** Client address classification for `/clients/.../addresses` (API enum values). */
+export type ClientAddressType = "ship_to" | "billing";
+
+/** Ship-to picker: everything except explicit `billing` (includes legacy rows with no type). */
+export function isClientShipToAddress(addr: { address_type?: string }): boolean {
+  if (addr.address_type == null || addr.address_type === "") return true;
+  return String(addr.address_type).toLowerCase() !== "billing";
+}
+
 export interface Contact {
   id?: number;
   client_id?: number;
@@ -24,6 +33,7 @@ export interface Address {
   zip_code: string;
   country: string;
   is_default: boolean;
+  address_type?: ClientAddressType;
 }
 
 export interface Client {
@@ -83,6 +93,7 @@ export interface CreateClientRequest {
     zip_code: string;
     country: string;
     is_default: boolean;
+    address_type: ClientAddressType;
   }>;
 }
 
@@ -178,6 +189,7 @@ export interface AddressRequest {
   zip_code: string;
   country: string;
   is_default: boolean;
+  address_type: ClientAddressType;
 }
 
 // Async thunk for creating a contact

@@ -14,6 +14,8 @@ import { toast } from "react-toastify";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
 import { TableDataLoader } from "@/components/TableDataLoader";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
+import { formatAppDateTime } from "@/lib/formatDate";
 
 // Column visibility storage key
 const COLUMN_VISIBILITY_STORAGE_KEY = "clients-table-column-visibility";
@@ -250,8 +252,7 @@ function ClientsContent() {
       sortable: true,
       cellRenderer: (params: ICellRendererParams<Client>) => {
         if (!params.value) return "";
-        const date = new Date(params.value);
-        return date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return formatAppDateTime(params.value as string, "");
       },
     },
   ], []);
@@ -556,20 +557,7 @@ function ClientsContent() {
         {isLoading ? (
           <TableDataLoader minHeight={500} />
         ) : (
-          <div
-            className="ag-theme-alpine-dark min-w-0"
-            style={{
-              height: "100%",
-              width: "100%",
-              "--ag-background-color": "var(--color-dark-bg-secondary)",
-              "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-              "--ag-odd-row-background-color": "var(--color-dark-bg)",
-              "--ag-row-hover-color": "var(--color-primary-hover)",
-              "--ag-header-foreground-color": "var(--color-text-primary)",
-              "--ag-foreground-color": "var(--color-text-primary)",
-              "--ag-border-color": "var(--color-dark-bg-tertiary)",
-            } as React.CSSProperties}
-          >
+          <AgGridThemeShell>
             <AgGridReact
               ref={gridRef}
               rowData={filteredData}
@@ -590,7 +578,7 @@ function ClientsContent() {
               suppressCellFocus={true}
               rowStyle={{ cursor: "pointer" }}
             />
-          </div>
+          </AgGridThemeShell>
         )}
       </Box>
 

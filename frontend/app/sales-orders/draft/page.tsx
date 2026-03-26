@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { useAppDispatch } from "@/lib/store/hooks";
@@ -21,6 +21,9 @@ import { FiArrowLeft, FiCheck, FiX, FiEdit2, FiTrash2, FiPlus } from "react-icon
 import { createSalesOrder, type CreateSalesOrderRequest } from "@/lib/api/services/salesOrdersService";
 import { fetchClients } from "@/lib/api/services/clientsService";
 import { fetchClientById } from "@/lib/api/services/clientsService";
+import { createAddress } from "@/lib/api/services/addressesService";
+import type { AddressRequest } from "@/lib/store/clientsSlice";
+import { isClientShipToAddress } from "@/lib/store/clientsSlice";
 import { fetchSKUs, createSKU, type SKUApiResponse, type CreateSKURequest } from "@/lib/api/services/skusService";
 import { type ParsedPdfResponse } from "@/lib/api/services/pdfService";
 import { toast } from "react-toastify";
@@ -31,14 +34,44 @@ interface Client {
   company_name: string;
 }
 
-interface ShipToAddress {
+/** Saved client address row for Select + matching. */
+interface ClientAddressOption {
   id: string;
+  label: string;
   addressLine1: string;
   addressLine2: string;
   city: string;
   state: string;
   zipCode: string;
   country: string;
+}
+
+const ADDRESS_NEW_MANUAL = "__new__";
+
+function isBillingAddressRow(addr: { address_type?: string }): boolean {
+  return String(addr.address_type || "").toLowerCase() === "billing";
+}
+
+function mapApiAddressToOption(addr: {
+  id: number;
+  label?: string;
+  address_line_1?: string;
+  address_line_2?: string | null;
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  country?: string;
+}): ClientAddressOption {
+  return {
+    id: String(addr.id),
+    label: addr.label || "",
+    addressLine1: addr.address_line_1 || "",
+    addressLine2: addr.address_line_2 || "",
+    city: addr.city || "",
+    state: addr.state || "",
+    zipCode: addr.zip_code || "",
+    country: addr.country || "",
+  };
 }
 
 interface DraftLineItem {
@@ -58,32 +91,27 @@ interface DraftLineItem {
   matchConfidence: string;
 }
 
+/** Editable address block (values from PDF + user edits). */
+interface DraftAddressFields {
+  label: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  country: string;
+}
+
 interface DraftFormData {
   orderNumber: string;
   orderDate: string | null;
-  dueDate: string | null;
   clientId: string;
-  shipToAddressId: string;
   customerName: string | null;
   customerContact: string | null;
   customerEmail: string | null;
   customerPhone: string | null;
-  shipToAddress: {
-    addressLine1: string | null;
-    addressLine2: string | null;
-    city: string | null;
-    state: string | null;
-    zipCode: string | null;
-    country: string | null;
-  };
-  billToAddress: {
-    addressLine1: string | null;
-    addressLine2: string | null;
-    city: string | null;
-    state: string | null;
-    zipCode: string | null;
-    country: string | null;
-  };
+  shipToAddress: DraftAddressFields;
+  billToAddress: DraftAddressFields;
   subtotal: string;
   taxAmount: string | null;
   totalAmount: string;
@@ -94,14 +122,72 @@ interface DraftFormData {
   originalPdfUrl: string;
   parsingNotes: string | null;
   confidenceScore: string;
+  /** Saved client ship-to row id, `__new__` for PDF/manual entry, or "" if none. */
+  shipToAddressId: string;
+  /** Saved client billing row id, `__new__`, or "". */
+  billToAddressId: string;
+}
+
+function optionToDraftFields(o: ClientAddressOption): DraftAddressFields {
+  return {
+    label: o.label || "",
+    addressLine1: o.addressLine1,
+    addressLine2: o.addressLine2,
+    city: o.city,
+    state: o.state,
+    zipCode: o.zipCode,
+    country: o.country || "US",
+  };
+}
+
+function parsedMatchesSavedOption(parsed: DraftAddressFields, saved: ClientAddressOption): boolean {
+  if (!normAddrPart(parsed.addressLine1) || !normAddrPart(parsed.city)) return false;
+  const line1 = normAddrPart(parsed.addressLine1) === normAddrPart(saved.addressLine1);
+  const city = normAddrPart(parsed.city) === normAddrPart(saved.city);
+  const stateOk =
+    !normAddrPart(parsed.state) ||
+    !normAddrPart(saved.state) ||
+    normAddrPart(parsed.state) === normAddrPart(saved.state);
+  return line1 && city && stateOk;
+}
+
+function isSavedAddressId(v: string): boolean {
+  return v !== "" && v !== ADDRESS_NEW_MANUAL && /^\d+$/.test(v);
+}
+
+function strFromParse(v: string | null | undefined): string {
+  return v ?? "";
+}
+
+/** Contact / phone from PDF may be string or number; always store as string for text fields. */
+function optionalStringFromParsed(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  if (typeof v === "number" && !Number.isFinite(v)) return null;
+  return String(v);
+}
+
+function normAddrPart(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** Same physical address lines (ignore labels) — skip redundant billing POST. */
+function draftAddressLinesEqual(a: DraftAddressFields, b: DraftAddressFields): boolean {
+  return (
+    normAddrPart(a.addressLine1) === normAddrPart(b.addressLine1) &&
+    normAddrPart(a.addressLine2) === normAddrPart(b.addressLine2) &&
+    normAddrPart(a.city) === normAddrPart(b.city) &&
+    normAddrPart(a.state) === normAddrPart(b.state) &&
+    normAddrPart(a.zipCode) === normAddrPart(b.zipCode) &&
+    normAddrPart(a.country) === normAddrPart(b.country)
+  );
 }
 
 function DraftContent() {
   const router = useRouter();
   const dispatch = useAppDispatch();
+  const confirmInFlightRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [selectedClientId, setSelectedClientId] = useState<string>("");
-  const [shipToAddresses, setShipToAddresses] = useState<ShipToAddress[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [skus, setSkus] = useState<SKUApiResponse[]>([]);
   const [isLoadingClients, setIsLoadingClients] = useState(true);
@@ -117,6 +203,12 @@ function DraftContent() {
     description: "",
   });
 
+  const [shipToAddresses, setShipToAddresses] = useState<ClientAddressOption[]>([]);
+  const [billingAddresses, setBillingAddresses] = useState<ClientAddressOption[]>([]);
+  const [isLoadingClientAddresses, setIsLoadingClientAddresses] = useState(false);
+  const formDataRef = useRef(formData);
+  formDataRef.current = formData;
+
   // Load parsed PDF data from sessionStorage
   useEffect(() => {
     const draftData = sessionStorage.getItem("soDraft");
@@ -128,28 +220,28 @@ function DraftContent() {
         const mappedFormData: DraftFormData = {
           orderNumber: parsed?.order_number,
           orderDate: parsed?.order_date,
-          dueDate: parsed?.due_date,
           clientId: parsed?.matched_client_id?.toString() || "",
-          shipToAddressId: "",
           customerName: parsed?.customer_name,
-          customerContact: parsed?.customer_contact,
-          customerEmail: parsed?.customer_email,
-          customerPhone: parsed?.customer_phone,
+          customerContact: optionalStringFromParsed(parsed?.customer_contact),
+          customerEmail: optionalStringFromParsed(parsed?.customer_email),
+          customerPhone: optionalStringFromParsed(parsed?.customer_phone),
           shipToAddress: {
-            addressLine1: parsed?.ship_to_address?.address_line_1,
-            addressLine2: parsed?.ship_to_address?.address_line_2,
-            city: parsed?.ship_to_address?.city,
-            state: parsed?.ship_to_address?.state,
-            zipCode: parsed?.ship_to_address?.zip_code,
-            country: parsed?.ship_to_address?.country,
+            label: optionalStringFromParsed(parsed?.ship_to_address?.label) ?? "Ship-To",
+            addressLine1: strFromParse(parsed?.ship_to_address?.address_line_1),
+            addressLine2: strFromParse(parsed?.ship_to_address?.address_line_2),
+            city: strFromParse(parsed?.ship_to_address?.city),
+            state: strFromParse(parsed?.ship_to_address?.state),
+            zipCode: strFromParse(parsed?.ship_to_address?.zip_code),
+            country: strFromParse(parsed?.ship_to_address?.country) || "US",
           },
           billToAddress: {
-            addressLine1: parsed?.bill_to_address?.address_line_1,
-            addressLine2: parsed?.bill_to_address?.address_line_2,
-            city: parsed?.bill_to_address?.city,
-            state: parsed?.bill_to_address?.state,
-            zipCode: parsed?.bill_to_address?.zip_code,
-            country: parsed?.bill_to_address?.country,
+            label: optionalStringFromParsed(parsed?.bill_to_address?.label) ?? "Bill-To",
+            addressLine1: strFromParse(parsed?.bill_to_address?.address_line_1),
+            addressLine2: strFromParse(parsed?.bill_to_address?.address_line_2),
+            city: strFromParse(parsed?.bill_to_address?.city),
+            state: strFromParse(parsed?.bill_to_address?.state),
+            zipCode: strFromParse(parsed?.bill_to_address?.zip_code),
+            country: strFromParse(parsed?.bill_to_address?.country) || "US",
           },
           subtotal: parsed?.subtotal,
           taxAmount: parsed?.tax_amount,
@@ -165,7 +257,7 @@ function DraftContent() {
             quantity: item.quantity,
             unitPrice: parseFloat(item.unit_price),
             totalPrice: parseFloat(item.total_price),
-            dueDate: item.due_date,
+            dueDate: item.due_date ?? parsed?.due_date ?? null,
             notes: item.notes,
             originalSkuCode: item.sku_code,
             originalSkuDescription: item.sku_description,
@@ -176,10 +268,12 @@ function DraftContent() {
           originalPdfUrl: parsed?.s3_url,
           parsingNotes: parsed?.parsing_notes,
           confidenceScore: parsed?.confidence_score,
+          shipToAddressId:
+            parsed?.ship_to_address_id != null ? String(parsed.ship_to_address_id) : "",
+          billToAddressId: "",
         };
-        
+
         setFormData(mappedFormData);
-        setSelectedClientId(mappedFormData.clientId);
         setHasData(true);
       } catch (error) {
         console.error("Error parsing draft data:", error);
@@ -218,46 +312,93 @@ function DraftContent() {
     loadData();
   }, []);
 
-  // Load ship-to addresses when client is selected
   useEffect(() => {
-    const loadAddresses = async () => {
-      if (selectedClientId && formData) {
-        try {
-          const client = await fetchClientById(selectedClientId);
-          const addresses: ShipToAddress[] = (client.addresses || []).map((addr: any) => ({
-            id: addr.id.toString(),
-            addressLine1: addr.address_line_1 || "",
-            addressLine2: addr.address_line_2 || "",
-            city: addr.city || "",
-            state: addr.state || "",
-            zipCode: addr.zip_code || "",
-            country: addr.country || "",
-          }));
-          setShipToAddresses(addresses);
-          
-          // Try to match ship-to address from parsed data
-          if (addresses.length > 0 && formData.shipToAddress.city) {
-            const matched = addresses.find(
-              (addr) =>
-                addr.city?.toLowerCase() === formData.shipToAddress.city?.toLowerCase() &&
-                addr.state?.toLowerCase() === formData.shipToAddress.state?.toLowerCase()
-            );
-            if (matched) {
-              setFormData((prev) => prev ? { ...prev, shipToAddressId: matched.id } : null);
+    const clientId = formDataRef.current?.clientId;
+    if (!clientId) {
+      setShipToAddresses([]);
+      setBillingAddresses([]);
+      setIsLoadingClientAddresses(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    setIsLoadingClientAddresses(true);
+    void (async () => {
+      try {
+        const client = await fetchClientById(clientId);
+        if (cancelled) return;
+        const raw = client.addresses || [];
+        const shipOpts = raw
+          .filter((a: { address_type?: string }) => isClientShipToAddress(a))
+          .map((a: any) => mapApiAddressToOption(a));
+        const billOpts = raw
+          .filter((a: { address_type?: string }) => isBillingAddressRow(a))
+          .map((a: any) => mapApiAddressToOption(a));
+        setShipToAddresses(shipOpts);
+        setBillingAddresses(billOpts);
+
+        setFormData((prev) => {
+          if (!prev || prev.clientId !== clientId) return prev;
+          const pdfShip = prev.shipToAddress;
+          const pdfBill = prev.billToAddress;
+
+          let shipId = prev.shipToAddressId;
+          if (
+            shipId === ADDRESS_NEW_MANUAL &&
+            shipOpts.length > 0
+          ) {
+            /* keep explicit "new address" */
+          } else if (isSavedAddressId(shipId) && shipOpts.some((s) => s.id === shipId)) {
+            /* keep valid saved */
+          } else {
+            shipId = "";
+            if (shipOpts.length > 0) {
+              const matched = shipOpts.find((s) => parsedMatchesSavedOption(pdfShip, s));
+              shipId = matched ? matched.id : ADDRESS_NEW_MANUAL;
+            } else {
+              shipId = "";
             }
           }
-        } catch (error: any) {
-          toast.error(error.message || "Failed to load addresses");
-          console.error("Error loading addresses:", error);
+
+          let billId = prev.billToAddressId;
+          if (
+            billId === ADDRESS_NEW_MANUAL &&
+            billOpts.length > 0
+          ) {
+            /* keep explicit "new address" */
+          } else if (isSavedAddressId(billId) && billOpts.some((b) => b.id === billId)) {
+            /* keep valid saved */
+          } else {
+            billId = "";
+            if (billOpts.length > 0) {
+              const matched = billOpts.find((b) => parsedMatchesSavedOption(pdfBill, b));
+              billId = matched ? matched.id : ADDRESS_NEW_MANUAL;
+            } else {
+              billId = "";
+            }
+          }
+
+          return { ...prev, shipToAddressId: shipId, billToAddressId: billId };
+        });
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : "Failed to load client addresses";
+          toast.error(msg);
           setShipToAddresses([]);
+          setBillingAddresses([]);
         }
-      } else {
-        setShipToAddresses([]);
+      } finally {
+        if (!cancelled) {
+          setIsLoadingClientAddresses(false);
+        }
       }
+    })();
+
+    return () => {
+      cancelled = true;
     };
-    
-    loadAddresses();
-  }, [selectedClientId, formData]);
+  }, [formData?.clientId]);
 
   const updateFormField = (field: keyof DraftFormData, value: any) => {
     setFormData((prev) => (prev ? { ...prev, [field]: value } : null));
@@ -322,73 +463,169 @@ function DraftContent() {
     updateFormField("lineItems", renumberedItems);
   };
 
+  const updateAddressField = (
+    block: "shipToAddress" | "billToAddress",
+    field: keyof DraftAddressFields,
+    value: string
+  ) => {
+    setFormData((prev) =>
+      prev
+        ? {
+            ...prev,
+            [block]: { ...prev[block], [field]: value },
+          }
+        : null
+    );
+  };
+
   const getTotalAmount = () => {
     if (!formData) return 0;
     return formData.lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
   };
 
   const handleConfirm = async () => {
-    if (!formData) return;
-    
-    // Validation
-    if (!formData.clientId) {
-      toast.error("Please select a client");
-      return;
-    }
-    
-    if (!formData.shipToAddressId) {
-      toast.error("Please select a ship-to address");
-      return;
-    }
-    
-    if (formData.lineItems.length === 0) {
-      toast.error("At least one line item is required");
-      return;
-    }
-    
-    // Check if all line items have SKU selected
-    const missingSkus = formData.lineItems.filter((item) => !item.skuId);
-    if (missingSkus.length > 0) {
-      toast.error("Please select SKU for all line items");
-      return;
-    }
-
+    if (!formData || confirmInFlightRef.current) return;
+    confirmInFlightRef.current = true;
     try {
+      if (!formData.clientId) {
+        toast.error("Please select a client");
+        return;
+      }
+
+      const shipIsSaved =
+        isSavedAddressId(formData.shipToAddressId) &&
+        shipToAddresses.some((s) => s.id === formData.shipToAddressId);
+
+      if (!shipIsSaved) {
+        const ship = formData.shipToAddress;
+        if (!ship.label.trim() || !ship.addressLine1.trim() || !ship.city.trim()) {
+          toast.error("Ship-to address: label, address line 1, and city are required");
+          return;
+        }
+        if (!ship.state.trim() || !ship.zipCode.trim() || !ship.country.trim()) {
+          toast.error("Ship-to address: state, ZIP code, and country are required");
+          return;
+        }
+      }
+
+      const bill = formData.billToAddress;
+      const billPartial =
+        bill.label.trim() ||
+        bill.addressLine1.trim() ||
+        bill.city.trim() ||
+        bill.state.trim() ||
+        bill.zipCode.trim() ||
+        bill.country.trim();
+
+      const billIsSaved =
+        isSavedAddressId(formData.billToAddressId) &&
+        billingAddresses.some((b) => b.id === formData.billToAddressId);
+
+      if (billPartial && !billIsSaved) {
+        if (!bill.label.trim() || !bill.addressLine1.trim() || !bill.city.trim()) {
+          toast.error(
+            "Bill-to address: complete label, address line 1, and city or clear all bill-to fields"
+          );
+          return;
+        }
+        if (!bill.state.trim() || !bill.zipCode.trim() || !bill.country.trim()) {
+          toast.error(
+            "Bill-to address: state, ZIP code, and country are required when billing address is filled in"
+          );
+          return;
+        }
+      }
+
+      if (formData.lineItems.length === 0) {
+        toast.error("At least one line item is required");
+        return;
+      }
+
+      const missingSkus = formData.lineItems.filter((item) => !item.skuId);
+      if (missingSkus.length > 0) {
+        toast.error("Please select SKU for all line items");
+        return;
+      }
+
       setIsSaving(true);
-      
-      // Map form data to API request format
-      const createRequest: CreateSalesOrderRequest = {
-        order_number: formData.orderNumber,
-        client_id: parseInt(formData.clientId),
-        ship_to_address_id: formData.shipToAddressId ? parseInt(formData.shipToAddressId) : null,
-        order_date: formData.orderDate || null,
-        due_date: formData.dueDate || null,
-        original_pdf_url: formData.originalPdfUrl || null,
-        notes: formData.notes || null,
-        lines: formData.lineItems.map((item) => ({
-          sku_id: parseInt(item.skuId),
-          line_number: item.lineNumber,
-          ordered_qty: item.quantity,
-          unit_price: item.unitPrice,
-          due_date: item.dueDate || null,
-        })),
-      };
-      
-      const newSalesOrder = await createSalesOrder(createRequest);
-      toast.success("Sales order created successfully");
-      
-      // Add the new sales order to Redux store
-      dispatch(addSalesOrder(newSalesOrder));
-      
-      // Clear draft data
-      sessionStorage.removeItem("soDraft");
-      
-      router.push("/sales-orders");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to create sales order");
-      console.error("Error creating sales order:", error);
+      try {
+        const clientIdNum = parseInt(formData.clientId, 10);
+
+        let shipToIdForSo: number;
+        if (shipIsSaved) {
+          shipToIdForSo = parseInt(formData.shipToAddressId, 10);
+        } else {
+          const ship = formData.shipToAddress;
+          const shipPayload: AddressRequest = {
+            label: ship.label.trim(),
+            address_line_1: ship.addressLine1.trim(),
+            address_line_2: ship.addressLine2.trim() || undefined,
+            city: ship.city.trim(),
+            state: ship.state.trim(),
+            zip_code: ship.zipCode.trim(),
+            country: ship.country.trim() || "US",
+            is_default: false,
+            address_type: "ship_to",
+          };
+          const createdShip = await createAddress(clientIdNum, shipPayload);
+          shipToIdForSo = createdShip.id;
+        }
+
+        const shipLinesForDedupe: DraftAddressFields = shipIsSaved
+          ? optionToDraftFields(
+              shipToAddresses.find((s) => s.id === formData.shipToAddressId)!
+            )
+          : formData.shipToAddress;
+
+        if (billPartial && !billIsSaved) {
+          if (!draftAddressLinesEqual(shipLinesForDedupe, formData.billToAddress)) {
+            const billPayload: AddressRequest = {
+              label: bill.label.trim(),
+              address_line_1: bill.addressLine1.trim(),
+              address_line_2: bill.addressLine2.trim() || undefined,
+              city: bill.city.trim(),
+              state: bill.state.trim(),
+              zip_code: bill.zipCode.trim(),
+              country: bill.country.trim() || "US",
+              is_default: false,
+              address_type: "billing",
+            };
+            await createAddress(clientIdNum, billPayload);
+          }
+        }
+
+        const createRequest: CreateSalesOrderRequest = {
+          order_number: formData.orderNumber,
+          client_id: clientIdNum,
+          ship_to_address_id: shipToIdForSo,
+          order_date: formData.orderDate || null,
+          original_pdf_url: formData.originalPdfUrl || null,
+          notes: formData.notes || null,
+          lines: formData.lineItems.map((item) => ({
+            sku_id: parseInt(item.skuId),
+            line_number: item.lineNumber,
+            ordered_qty: item.quantity,
+            unit_price: item.unitPrice,
+            due_date: item.dueDate || null,
+          })),
+        };
+
+        const newSalesOrder = await createSalesOrder(createRequest);
+        toast.success("Sales order created successfully");
+
+        dispatch(addSalesOrder(newSalesOrder));
+
+        sessionStorage.removeItem("soDraft");
+
+        router.push("/sales-orders");
+      } catch (error: any) {
+        toast.error(error.message || "Failed to create sales order");
+        console.error("Error creating sales order:", error);
+      } finally {
+        setIsSaving(false);
+      }
     } finally {
-      setIsSaving(false);
+      confirmInFlightRef.current = false;
     }
   };
 
@@ -470,6 +707,74 @@ function DraftContent() {
     );
   }
 
+  const inputStyle = {
+    background: "var(--color-dark-bg-secondary)",
+    border: "1px solid var(--color-dark-bg-tertiary)",
+    color: "var(--color-text-primary)",
+  } as const;
+
+  const shipComplete =
+    formData.shipToAddress.label.trim() &&
+    formData.shipToAddress.addressLine1.trim() &&
+    formData.shipToAddress.city.trim() &&
+    formData.shipToAddress.state.trim() &&
+    formData.shipToAddress.zipCode.trim() &&
+    formData.shipToAddress.country.trim();
+
+  const billComplete =
+    formData.billToAddress.label.trim() &&
+    formData.billToAddress.addressLine1.trim() &&
+    formData.billToAddress.city.trim() &&
+    formData.billToAddress.state.trim() &&
+    formData.billToAddress.zipCode.trim() &&
+    formData.billToAddress.country.trim();
+
+  const billPartialForSubmit =
+    formData.billToAddress.label.trim() ||
+    formData.billToAddress.addressLine1.trim() ||
+    formData.billToAddress.city.trim() ||
+    formData.billToAddress.state.trim() ||
+    formData.billToAddress.zipCode.trim() ||
+    formData.billToAddress.country.trim();
+
+  const shipSavedOk =
+    isSavedAddressId(formData.shipToAddressId) &&
+    shipToAddresses.some((s) => s.id === formData.shipToAddressId) &&
+    !isLoadingClientAddresses;
+
+  const showShipManual =
+    !isLoadingClientAddresses &&
+    (shipToAddresses.length === 0 ||
+      formData.shipToAddressId === ADDRESS_NEW_MANUAL ||
+      !isSavedAddressId(formData.shipToAddressId) ||
+      !shipToAddresses.some((s) => s.id === formData.shipToAddressId));
+
+  const shipOk =
+    !isLoadingClientAddresses && (shipSavedOk || (showShipManual && shipComplete));
+
+  const billSavedOk =
+    isSavedAddressId(formData.billToAddressId) &&
+    billingAddresses.some((b) => b.id === formData.billToAddressId) &&
+    !isLoadingClientAddresses;
+
+  const showBillManual =
+    !isLoadingClientAddresses &&
+    !billSavedOk &&
+    (billingAddresses.length === 0 ||
+      formData.billToAddressId === ADDRESS_NEW_MANUAL ||
+      !isSavedAddressId(formData.billToAddressId) ||
+      !billingAddresses.some((b) => b.id === formData.billToAddressId));
+
+  const billOk =
+    !billPartialForSubmit || billSavedOk || (showBillManual && billComplete);
+
+  const canSubmit =
+    Boolean(formData.clientId) &&
+    shipOk &&
+    billOk &&
+    formData.lineItems.length > 0 &&
+    formData.lineItems.every((item) => item.skuId);
+
   return (
     <Flex direction="column" gap="4" style={{ padding: "1rem", maxWidth: "1400px", margin: "0 auto" }}>
       <Flex align="center" gap="3">
@@ -530,21 +835,6 @@ function DraftContent() {
                 }}
               />
             </Box>
-            <Box style={{ flex: "1", minWidth: "200px" }}>
-              <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
-                Due Date
-              </Text>
-              <TextField.Root
-                type="date"
-                value={formData.dueDate || ""}
-                onChange={(e) => updateFormField("dueDate", e.target.value || null)}
-                style={{
-                  background: "var(--color-dark-bg-secondary)",
-                  border: "1px solid var(--color-dark-bg-tertiary)",
-                  color: "var(--color-text-primary)",
-                }}
-              />
-            </Box>
           </Flex>
 
           <Box>
@@ -553,10 +843,7 @@ function DraftContent() {
             </Text>
             <Select.Root
               value={formData.clientId}
-              onValueChange={(value) => {
-                updateFormField("clientId", value);
-                setSelectedClientId(value);
-              }}
+              onValueChange={(value) => updateFormField("clientId", value)}
             >
               <Select.Trigger
                 style={{
@@ -582,48 +869,40 @@ function DraftContent() {
             </Select.Root>
           </Box>
 
-          {shipToAddresses.length > 0 && (
-            <Box>
-              <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
-                Ship-To Address *
-              </Text>
-              <Select.Root
-                value={formData.shipToAddressId}
-                onValueChange={(value) => updateFormField("shipToAddressId", value)}
-              >
-                <Select.Trigger
-                  style={{
-                    background: "var(--color-dark-bg-secondary)",
-                    border: "1px solid var(--color-dark-bg-tertiary)",
-                    color: "var(--color-text-primary)",
-                    width: "100%",
-                  }}
-                />
-                <Select.Content>
-                  {shipToAddresses.map((addr) => (
-                    <Select.Item key={addr.id} value={addr.id}>
-                      {addr.addressLine1}, {addr.city}, {addr.state} {addr.zipCode}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-            </Box>
-          )}
-
-          {selectedClientId && shipToAddresses.length === 0 && (
-            <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
-              No ship-to addresses available for this client. Please add addresses in the client profile.
-            </Text>
-          )}
-
           <Flex gap="4" wrap="wrap">
             <Box style={{ flex: "1", minWidth: "200px" }}>
               <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
                 Customer Contact
               </Text>
               <TextField.Root
-                value={formData.customerContact || ""}
-                onChange={(e) => updateFormField("customerContact", e.target.value || null)}
+                type="text"
+                inputMode="text"
+                autoComplete="name"
+                value={formData.customerContact != null ? String(formData.customerContact) : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateFormField("customerContact", v.length === 0 ? null : v);
+                }}
+                style={{
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+            </Box>
+            <Box style={{ flex: "1", minWidth: "240px" }}>
+              <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
+                Customer Email
+              </Text>
+              <TextField.Root
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={formData.customerEmail != null ? String(formData.customerEmail) : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateFormField("customerEmail", v.length === 0 ? null : v);
+                }}
                 style={{
                   background: "var(--color-dark-bg-secondary)",
                   border: "1px solid var(--color-dark-bg-tertiary)",
@@ -636,8 +915,14 @@ function DraftContent() {
                 Customer Phone
               </Text>
               <TextField.Root
-                value={formData.customerPhone || ""}
-                onChange={(e) => updateFormField("customerPhone", e.target.value || null)}
+                type="text"
+                inputMode="tel"
+                autoComplete="tel"
+                value={formData.customerPhone != null ? String(formData.customerPhone) : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateFormField("customerPhone", v.length === 0 ? null : v);
+                }}
                 style={{
                   background: "var(--color-dark-bg-secondary)",
                   border: "1px solid var(--color-dark-bg-tertiary)",
@@ -646,6 +931,259 @@ function DraftContent() {
               />
             </Box>
           </Flex>
+        </Flex>
+      </Card>
+
+      <Card style={{ padding: "1.5rem" }}>
+        <Heading size={{ initial: "4", md: "5" }} mb="4">
+          Ship-To Address *
+        </Heading>
+        <Text size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
+          Choose a saved ship-to for this client when it matches the PDF, or use &quot;New address&quot; to edit
+          the extracted address and save it as a new row on create.
+        </Text>
+        <Flex direction="column" gap="3">
+          {isLoadingClientAddresses ? (
+            <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
+              Loading client addresses…
+            </Text>
+          ) : shipToAddresses.length > 0 ? (
+            <Box>
+              <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
+                Saved ship-to on client *
+              </Text>
+              <Select.Root
+                value={
+                  isSavedAddressId(formData.shipToAddressId) &&
+                  shipToAddresses.some((s) => s.id === formData.shipToAddressId)
+                    ? formData.shipToAddressId
+                    : ADDRESS_NEW_MANUAL
+                }
+                onValueChange={(v) => updateFormField("shipToAddressId", v)}
+              >
+                <Select.Trigger
+                  style={{
+                    background: "var(--color-dark-bg-secondary)",
+                    border: "1px solid var(--color-dark-bg-tertiary)",
+                    color: "var(--color-text-primary)",
+                    width: "100%",
+                  }}
+                />
+                <Select.Content>
+                  {shipToAddresses.map((addr) => (
+                    <Select.Item key={addr.id} value={addr.id}>
+                      {addr.label ? `${addr.label} — ` : ""}
+                      {addr.addressLine1}, {addr.city}
+                      {addr.state ? `, ${addr.state}` : ""} {addr.zipCode}
+                    </Select.Item>
+                  ))}
+                  <Select.Item value={ADDRESS_NEW_MANUAL}>
+                    New address (PDF fields below)
+                  </Select.Item>
+                </Select.Content>
+              </Select.Root>
+            </Box>
+          ) : (
+            <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
+              No ship-to addresses on file for this client. Enter the address from the PDF below; it will be
+              created when you submit.
+            </Text>
+          )}
+
+          {showShipManual && (
+            <>
+              <Text size="2" weight="medium" style={{ color: "var(--color-text-primary)" }}>
+                Address from document (edit if needed)
+              </Text>
+              <TextField.Root
+                type="text"
+                inputMode="text"
+                placeholder="Label *"
+                value={
+                  formData.shipToAddress.label != null
+                    ? String(formData.shipToAddress.label)
+                    : ""
+                }
+                onChange={(e) => updateAddressField("shipToAddress", "label", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <TextField.Root
+                placeholder="Address Line 1 *"
+                value={formData.shipToAddress.addressLine1}
+                onChange={(e) => updateAddressField("shipToAddress", "addressLine1", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <TextField.Root
+                placeholder="Address Line 2 (optional)"
+                value={formData.shipToAddress.addressLine2}
+                onChange={(e) => updateAddressField("shipToAddress", "addressLine2", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <Flex gap="3" wrap="wrap">
+                <Box style={{ flex: "1", minWidth: "200px" }}>
+                  <TextField.Root
+                    placeholder="City *"
+                    value={formData.shipToAddress.city}
+                    onChange={(e) => updateAddressField("shipToAddress", "city", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="State *"
+                    value={formData.shipToAddress.state}
+                    onChange={(e) => updateAddressField("shipToAddress", "state", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="ZIP Code *"
+                    value={formData.shipToAddress.zipCode}
+                    onChange={(e) => updateAddressField("shipToAddress", "zipCode", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="Country *"
+                    value={formData.shipToAddress.country}
+                    onChange={(e) => updateAddressField("shipToAddress", "country", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+              </Flex>
+            </>
+          )}
+        </Flex>
+      </Card>
+
+      <Card style={{ padding: "1.5rem" }}>
+        <Heading size={{ initial: "4", md: "5" }} mb="4">
+          Bill-To Address
+        </Heading>
+        <Text size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
+          Optional. Match a saved billing address when possible, or use new address fields from the PDF. Clear all
+          billing fields if you do not want to store billing.
+        </Text>
+        <Flex direction="column" gap="3">
+          {!isLoadingClientAddresses && billingAddresses.length > 0 && (
+            <Box>
+              <Text size="2" weight="medium" mb="2" as="label" style={{ color: "var(--color-text-primary)" }}>
+                Saved billing on client
+              </Text>
+              <Select.Root
+                value={
+                  isSavedAddressId(formData.billToAddressId) &&
+                  billingAddresses.some((b) => b.id === formData.billToAddressId)
+                    ? formData.billToAddressId
+                    : ADDRESS_NEW_MANUAL
+                }
+                onValueChange={(v) => updateFormField("billToAddressId", v)}
+              >
+                <Select.Trigger
+                  style={{
+                    background: "var(--color-dark-bg-secondary)",
+                    border: "1px solid var(--color-dark-bg-tertiary)",
+                    color: "var(--color-text-primary)",
+                    width: "100%",
+                  }}
+                />
+                <Select.Content>
+                  {billingAddresses.map((addr) => (
+                    <Select.Item key={addr.id} value={addr.id}>
+                      {addr.label ? `${addr.label} — ` : ""}
+                      {addr.addressLine1}, {addr.city}
+                      {addr.state ? `, ${addr.state}` : ""} {addr.zipCode}
+                    </Select.Item>
+                  ))}
+                  <Select.Item value={ADDRESS_NEW_MANUAL}>
+                    New address (PDF fields below)
+                  </Select.Item>
+                </Select.Content>
+              </Select.Root>
+            </Box>
+          )}
+
+          {showBillManual && (
+            <>
+              <Text size="2" weight="medium" style={{ color: "var(--color-text-primary)" }}>
+                Billing from document (edit if needed)
+              </Text>
+              <TextField.Root
+                type="text"
+                inputMode="text"
+                placeholder="Label *"
+                value={
+                  formData.billToAddress.label != null
+                    ? String(formData.billToAddress.label)
+                    : ""
+                }
+                onChange={(e) => updateAddressField("billToAddress", "label", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <TextField.Root
+                placeholder="Address Line 1 *"
+                value={formData.billToAddress.addressLine1}
+                onChange={(e) => updateAddressField("billToAddress", "addressLine1", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <TextField.Root
+                placeholder="Address Line 2 (optional)"
+                value={formData.billToAddress.addressLine2}
+                onChange={(e) => updateAddressField("billToAddress", "addressLine2", e.target.value)}
+                size="3"
+                style={inputStyle}
+              />
+              <Flex gap="3" wrap="wrap">
+                <Box style={{ flex: "1", minWidth: "200px" }}>
+                  <TextField.Root
+                    placeholder="City *"
+                    value={formData.billToAddress.city}
+                    onChange={(e) => updateAddressField("billToAddress", "city", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="State *"
+                    value={formData.billToAddress.state}
+                    onChange={(e) => updateAddressField("billToAddress", "state", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="ZIP Code *"
+                    value={formData.billToAddress.zipCode}
+                    onChange={(e) => updateAddressField("billToAddress", "zipCode", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="Country *"
+                    value={formData.billToAddress.country}
+                    onChange={(e) => updateAddressField("billToAddress", "country", e.target.value)}
+                    size="3"
+                    style={inputStyle}
+                  />
+                </Box>
+              </Flex>
+            </>
+          )}
         </Flex>
       </Card>
 
@@ -857,6 +1395,7 @@ function DraftContent() {
       {/* Action Buttons */}
       <Flex gap="3" justify="end">
         <Button
+          type="button"
           variant="soft"
           size="3"
           onClick={handleCancel}
@@ -866,16 +1405,13 @@ function DraftContent() {
           Cancel
         </Button>
         <Button
+          type="button"
           size="3"
           onClick={handleConfirm}
-          disabled={isSaving || !formData.clientId || !formData.shipToAddressId}
+          disabled={isSaving || !canSubmit}
           style={{
-            background: isSaving || !formData.clientId || !formData.shipToAddressId
-              ? "var(--color-disabled-bg)"
-              : "var(--color-primary)",
-            color: isSaving || !formData.clientId || !formData.shipToAddressId
-              ? "var(--color-disabled-text)"
-              : "var(--color-text-dark)",
+            background: isSaving || !canSubmit ? "var(--color-disabled-bg)" : "var(--color-primary)",
+            color: isSaving || !canSubmit ? "var(--color-disabled-text)" : "var(--color-text-dark)",
             fontWeight: "600",
           }}
         >

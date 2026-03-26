@@ -239,11 +239,21 @@ export interface SKUVendorResponse {
   vendor_id: number;
   is_default: boolean;
   vendor_name: string | null;
+  /** Optional unit cost from vendor for this SKU link. */
+  vendor_cost?: number | null;
 }
 
 export interface CreateSKUVendorRequest {
   vendor_id: number;
   is_default: boolean;
+  /** Optional; omit when not set. */
+  vendor_cost?: number;
+}
+
+export interface UpdateSKUVendorRequest {
+  is_default?: boolean;
+  /** Explicit null clears vendor cost. */
+  vendor_cost?: number | null;
 }
 
 /**
@@ -293,6 +303,28 @@ export const unlinkVendorFromSKU = async (skuId: number, vendorId: number): Prom
     if (!response.data.success) {
       throw new Error('Failed to unlink vendor from SKU');
     }
+  } catch (error: any) {
+    throw new Error(parseApiError(error));
+  }
+};
+
+/**
+ * Update a linked vendor on a SKU
+ */
+export const updateSKUVendor = async (
+  skuId: number,
+  vendorId: number,
+  vendorData: UpdateSKUVendorRequest
+): Promise<SKUVendorResponse> => {
+  try {
+    const response = await axiosClient.patch<ApiResponse<SKUVendorResponse>>(
+      `/skus/${skuId}/vendors/${vendorId}`,
+      vendorData
+    );
+    if (response.data.success && response.data.data) {
+      return Array.isArray(response.data.data) ? response.data.data[0] : response.data.data;
+    }
+    throw new Error('Invalid response format');
   } catch (error: any) {
     throw new Error(parseApiError(error));
   }

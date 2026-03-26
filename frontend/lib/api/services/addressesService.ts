@@ -4,7 +4,7 @@
 
 import { axiosClient, parseApiError } from '../axiosClient';
 import type { ApiResponse } from '../types';
-import type { AddressRequest } from '@/lib/store/clientsSlice';
+import type { AddressRequest, ClientAddressType } from '@/lib/store/clientsSlice';
 
 export interface Address {
   id: number;
@@ -17,6 +17,7 @@ export interface Address {
   zip_code: string;
   country: string;
   is_default: boolean;
+  address_type?: ClientAddressType;
 }
 
 /**

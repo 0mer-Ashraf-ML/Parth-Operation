@@ -4,7 +4,11 @@ import React, { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { notFound } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
-import { useAppSelector } from "@/lib/store/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/store/hooks";
+import {
+  updatePurchaseOrder as updatePurchaseOrderInStore,
+  removePurchaseOrder as removePurchaseOrderFromStore,
+} from "@/lib/store/purchaseOrdersSlice";
 import {
   fetchPurchaseOrderById,
   updatePurchaseOrder,
@@ -24,6 +28,14 @@ import {
 } from "@/lib/api/services/fulfillmentService";
 import DeleteConfirmationDialog from "@/components/DeleteConfirmationDialog";
 import { toast } from "react-toastify";
+import { formatAppDate, formatAppDateTime } from "@/lib/formatDate";
+import {
+  mapPoHeaderStatus,
+  poHeaderStatusLabel,
+  poHeaderStatusBadgeColor,
+  getPoHeaderStatusOptions,
+  type POHeaderStatus,
+} from "@/lib/poHeaderStatusDisplay";
 import { useFormik } from "formik";
 import * as yup from "yup";
 import {
@@ -56,8 +68,6 @@ import {
   FiCpu,
 } from "react-icons/fi";
 
-type POStatus = "in_production" | "packed_and_shipped" | "ready_for_pickup" | "delivered";
-
 interface PurchaseOrderDetail {
   id: number;
   poNumber: string;
@@ -67,7 +77,7 @@ interface PurchaseOrderDetail {
   vendorName: string;
   clientName: string;
   shipmentType: "drop_ship" | "in_house";
-  status: POStatus;
+  status: POHeaderStatus;
   expectedShipDate: string | null;
   expectedArrivalDate: string | null;
   isDeletable: boolean;
@@ -117,7 +127,7 @@ const mapPurchaseOrderDetailFromApi = (apiPO: PurchaseOrderApiResponse): Purchas
     vendorName: apiPO.vendor_name,
     clientName: apiPO.client_name,
     shipmentType: apiPO.shipment_type,
-    status: apiPO.status as POStatus,
+    status: mapPoHeaderStatus(apiPO.status),
     expectedShipDate: apiPO.expected_ship_date,
     expectedArrivalDate: apiPO.expected_arrival_date,
     isDeletable: apiPO.is_deletable,
@@ -143,40 +153,40 @@ const mapPurchaseOrderDetailFromApi = (apiPO: PurchaseOrderApiResponse): Purchas
   };
 };
 
-const getStatusColor = (status: POStatus) => {
-  switch (status) {
-    case "in_production":
-      return "orange";
-    case "packed_and_shipped":
-      return "blue";
-    case "ready_for_pickup":
-      return "purple";
-    case "delivered":
-      return "green";
-    default:
-      return "gray";
-  }
+/** Line item status workflow (granular API values; separate from PO header). */
+const LINE_STATUS_PIPELINE: Record<"drop_ship" | "in_house", string[]> = {
+  drop_ship: ["in_production", "packed_and_shipped", "delivered"],
+  in_house: ["in_production", "packed_and_shipped", "ready_for_pickup", "delivered"],
 };
 
-const getStatusLabel = (status: POStatus) => {
-  switch (status) {
-    case "in_production":
-      return "In Production";
-    case "packed_and_shipped":
-      return "Packed & Shipped";
-    case "ready_for_pickup":
-      return "Ready for Pickup";
-    case "delivered":
-      return "Delivered";
-    default:
-      return status;
+const LINE_STATUS_LABEL: Record<string, string> = {
+  in_production: "In Production",
+  packed_and_shipped: "Pack & Ship",
+  ready_for_pickup: "Ready for Pickup",
+  delivered: "Delivered",
+};
+
+const getLineStatusOptions = (
+  shipmentType: "drop_ship" | "in_house",
+  fromStatus: string,
+  options?: { vendorHideDeliveredInHouse?: boolean }
+): { value: string; label: string }[] => {
+  let pipeline = [...LINE_STATUS_PIPELINE[shipmentType]];
+  if (options?.vendorHideDeliveredInHouse && shipmentType === "in_house") {
+    pipeline = pipeline.filter((s) => s !== "delivered");
   }
+  const start = pipeline.indexOf(fromStatus);
+  const slice = start >= 0 ? pipeline.slice(start) : pipeline;
+  return slice.map((value) => ({
+    value,
+    label: LINE_STATUS_LABEL[value] || value,
+  }));
 };
 
 const validationSchema = yup.object({
   status: yup.string().required("Status is required"),
-  shipmentType: yup.string().when('status', {
-    is: 'in_production',
+  shipmentType: yup.string().when("status", {
+    is: "started",
     then: (schema) => schema.required("Shipment type is required"),
     otherwise: (schema) => schema.notRequired(),
   }),
@@ -193,6 +203,7 @@ interface POUpdateFormData {
 
 function PODetailContent() {
   const router = useRouter();
+  const dispatch = useAppDispatch();
   const params = useParams();
   const poId = params?.id as string;
   const [isLoading, setIsLoading] = useState(true);
@@ -218,6 +229,9 @@ function PODetailContent() {
   const [newStatus, setNewStatus] = useState<string>("");
   const { user } = useAppSelector((state) => state.auth);
 
+  const isVendorUser =
+    user?.role?.trim().toUpperCase() === "VENDOR"
+
   const formik = useFormik<POUpdateFormData>({
     initialValues: {
       status: "",
@@ -227,34 +241,59 @@ function PODetailContent() {
     },
     validationSchema,
     enableReinitialize: true,
-    onSubmit: async (values) => {
-      if (!poId) return;
-
-      try {
-        setIsSaving(true);
-        const updateData: UpdatePurchaseOrderRequest = {
-          status: values.status,
-          expected_ship_date: values.expectedShipDate || null,
-          expected_arrival_date: values.expectedArrivalDate || null,
-        };
-
-        // Only include shipment_type if status is "in_production"
-        if (values.status === "in_production") {
-          updateData.shipment_type = values.shipmentType;
-        }
-
-        const updatedPO = await updatePurchaseOrder(parseInt(poId), updateData);
-        const mapped = mapPurchaseOrderDetailFromApi(updatedPO);
-        setPOData(mapped);
-        toast.success("Purchase order updated successfully");
-      } catch (error: any) {
-        toast.error(error.message || "Failed to update purchase order");
-        console.error("Error updating purchase order:", error);
-      } finally {
-        setIsSaving(false);
-      }
-    },
+    onSubmit: () => {},
   });
+
+  const persistPurchaseOrder = async (values: POUpdateFormData) => {
+    if (!poId || !poData) return false;
+
+    try {
+      await validationSchema.validate(values);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Validation failed";
+      toast.error(message);
+      return false;
+    }
+
+    try {
+      setIsSaving(true);
+      const updateData: UpdatePurchaseOrderRequest = {
+        status: values.status,
+        expected_ship_date: values.expectedShipDate || null,
+        expected_arrival_date: values.expectedArrivalDate || null,
+      };
+
+      if (values.status === "started") {
+        updateData.shipment_type = values.shipmentType;
+      }
+
+      const updatedPO = await updatePurchaseOrder(parseInt(poId), updateData);
+      dispatch(updatePurchaseOrderInStore(updatedPO));
+      const mapped = mapPurchaseOrderDetailFromApi(updatedPO);
+      setPOData(mapped);
+      formik.setValues({
+        status: mapped.status,
+        shipmentType: mapped.shipmentType,
+        expectedShipDate: mapped.expectedShipDate || "",
+        expectedArrivalDate: mapped.expectedArrivalDate || "",
+      });
+      toast.success("Purchase order updated");
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to update purchase order";
+      toast.error(message);
+      console.error("Error updating purchase order:", error);
+      formik.setValues({
+        status: poData.status,
+        shipmentType: poData.shipmentType,
+        expectedShipDate: poData.expectedShipDate || "",
+        expectedArrivalDate: poData.expectedArrivalDate || "",
+      });
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   // Load purchase order data
   useEffect(() => {
@@ -298,6 +337,7 @@ function PODetailContent() {
     try {
       setIsDeletingPO(true);
       await deletePurchaseOrder(parseInt(poId));
+      dispatch(removePurchaseOrderFromStore(parseInt(poId)));
       toast.success("Purchase order deleted successfully");
       router.push("/purchase-orders");
     } catch (error: any) {
@@ -335,32 +375,32 @@ function PODetailContent() {
     }
   };
 
-  const handleUpdateLineStatus = async (lineId: number, status: string) => {
-    if (!poId) return;
+  const handleUpdateLineStatus = async (lineId: number, status: string): Promise<boolean> => {
+    if (!poId) return false;
 
     try {
       setIsSavingLine(true);
-      
-      // Find the line item to get its quantity
+
       const lineItem = poData?.lines.find((line) => line.id === lineId);
       if (!lineItem) {
         toast.error("Line item not found");
-        return;
+        return false;
       }
 
-      // Update with status and ordered_qty
       await updatePurchaseOrderLine(parseInt(poId), lineId, {
         status,
         ordered_qty: lineItem.quantity,
       });
 
-      // Reload PO data
       await loadPOData();
 
-      toast.success("Line item status updated successfully");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update line item status");
+      toast.success("Line item status updated");
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to update line item status";
+      toast.error(message);
       console.error("Error updating line item status:", error);
+      return false;
     } finally {
       setIsSavingLine(false);
     }
@@ -553,24 +593,6 @@ function PODetailContent() {
     }
   };
 
-  const getStatusOptions = (shipmentType: "drop_ship" | "in_house") => {
-    if (shipmentType === "drop_ship") {
-      return [
-        { value: "in_production", label: "In Production" },
-        { value: "packed_and_shipped", label: "Pack & Ship" },
-        { value: "delivered", label: "Delivered" },
-      ];
-    } else {
-      // in_house
-      return [
-        { value: "in_production", label: "In Production" },
-        { value: "packed_and_shipped", label: "Pack & Ship" },
-        { value: "ready_for_pickup", label: "Ready for Pickup" },
-        { value: "delivered", label: "Delivered" },
-      ];
-    }
-  };
-
   if (isLoading) {
     return (
       <Flex align="center" justify="center" style={{ height: "100vh" }}>
@@ -583,11 +605,11 @@ function PODetailContent() {
     notFound();
   }
 
-  const hasFormChanges =
-    formik.values.status !== poData.status ||
-    formik.values.shipmentType !== poData.shipmentType ||
+  const hasDateChanges =
     formik.values.expectedShipDate !== (poData.expectedShipDate || "") ||
     formik.values.expectedArrivalDate !== (poData.expectedArrivalDate || "");
+
+  const isPoCompleted = poData.status === "completed";
 
   return (
     <Flex direction="column" gap="4">
@@ -651,15 +673,14 @@ function PODetailContent() {
                 </Heading>
               </Box>
             </Flex>
-            <Badge color={getStatusColor(poData.status)} size="2">
-              {getStatusLabel(poData.status)}
+            <Badge color={poHeaderStatusBadgeColor(poData.status)} size="2">
+              {poHeaderStatusLabel(poData.status)}
             </Badge>
           </Flex>
 
           <Separator />
 
-          <form onSubmit={formik.handleSubmit}>
-            <Flex direction="column" gap="4">
+          <Flex direction="column" gap="4">
               <Flex gap="6" wrap="wrap">
                 <Box>
                   <Flex align="center" gap="2" mb="2">
@@ -712,20 +733,41 @@ function PODetailContent() {
                     htmlFor="shipmentType"
                     style={{ color: "var(--color-text-primary)" }}
                   >
-                    Shipment Type{formik.values.status === "in_production" ? " *" : ""}
+                    Shipment Type
+                    {/* {formik.values.status === "started" ? " *" : ""} */}
                   </Text>
                   <Select.Root
+                  
+                    size="3"
                     value={formik.values.shipmentType}
-                    disabled={formik.values.status !== "in_production"}
+                    disabled={true
+                      // formik.values.status !== "started" || isSaving || isPoCompleted
+                    }
                     onValueChange={(value) => {
-                        formik.setFieldValue("shipmentType", value as "drop_ship" | "in_house");
-                        // Reset status if current status is not valid for new shipment type
-                        const newOptions = getStatusOptions(value as "drop_ship" | "in_house");
-                        if (!newOptions.find(opt => opt.value === formik.values.status)) {
-                          formik.setFieldValue("status", newOptions[0].value);
-                        }
-                      }}
-                    >
+                      const newShipmentType = value as "drop_ship" | "in_house";
+                      const newOptions = getPoHeaderStatusOptions(
+                        mapPoHeaderStatus(formik.values.status)
+                      );
+                      let nextStatus = formik.values.status;
+                      if (!newOptions.find((opt) => opt.value === nextStatus)) {
+                        nextStatus = newOptions[0].value;
+                      }
+                      const next: POUpdateFormData = {
+                        ...formik.values,
+                        shipmentType: newShipmentType,
+                        status: nextStatus,
+                      };
+                      formik.setFieldValue("shipmentType", newShipmentType);
+                      formik.setFieldValue("status", nextStatus);
+                      if (
+                        newShipmentType === poData.shipmentType &&
+                        nextStatus === poData.status
+                      ) {
+                        return;
+                      }
+                      void persistPurchaseOrder(next);
+                    }}
+                  >
                     <Select.Trigger
                       id="shipmentType"
                       style={{
@@ -733,8 +775,12 @@ function PODetailContent() {
                         border: "1px solid var(--color-dark-bg-tertiary)",
                         color: "var(--color-text-primary)",
                         width: "100%",
-                        opacity: formik.values.status !== "in_production" ? 0.7 : 1,
-                        cursor: formik.values.status !== "in_production" ? "not-allowed" : undefined,
+                        opacity:
+                          formik.values.status !== "started" || isPoCompleted ? 0.7 : 1,
+                        cursor:
+                          formik.values.status !== "started" || isPoCompleted
+                            ? "not-allowed"
+                            : undefined,
                       }}
                     />
                       <Select.Content>
@@ -744,7 +790,7 @@ function PODetailContent() {
                     </Select.Root>
                 </Box>
 
-                <Box style={{ flex: "1", minWidth: "200px" }}>
+                <Box style={{ flex: "1", minWidth: "200px"}}>
                   <Text
                     size="2"
                     weight="medium"
@@ -753,11 +799,24 @@ function PODetailContent() {
                     htmlFor="status"
                     style={{ color: "var(--color-text-primary)" }}
                   >
-                    Status *
+                    PO status *
                   </Text>
                   <Select.Root
+                    size="3"
                     value={formik.values.status}
-                    onValueChange={(value) => formik.setFieldValue("status", value)}
+                    disabled={isSaving || isPoCompleted}
+                    onValueChange={(value) => {
+                      const next: POUpdateFormData = {
+                        ...formik.values,
+                        status: value as POHeaderStatus,
+                      };
+                      formik.setFieldValue("status", value);
+                      const unchanged =
+                        value === poData.status &&
+                        formik.values.shipmentType === poData.shipmentType;
+                      if (unchanged) return;
+                      void persistPurchaseOrder(next);
+                    }}
                   >
                     <Select.Trigger
                       id="status"
@@ -766,10 +825,12 @@ function PODetailContent() {
                         border: "1px solid var(--color-dark-bg-tertiary)",
                         color: "var(--color-text-primary)",
                         width: "100%",
+                        opacity: isPoCompleted ? 0.7 : 1,
+                        cursor: isPoCompleted ? "not-allowed" : undefined,
                       }}
                     />
                     <Select.Content>
-                      {getStatusOptions(formik.values.shipmentType).map((option) => (
+                      {getPoHeaderStatusOptions(poData.status).map((option) => (
                         <Select.Item key={option.value} value={option.value}>
                           {option.label}
                         </Select.Item>
@@ -831,18 +892,20 @@ function PODetailContent() {
                 </Box>
               </Flex>
 
-              {hasFormChanges && (
+              {hasDateChanges && (
                 <Flex gap="3" justify="end" mt="2">
                   <Button
                     type="button"
                     variant="soft"
                     onClick={() => {
-                      formik.setValues({
-                        status: poData.status,
-                        shipmentType: poData.shipmentType,
-                        expectedShipDate: poData.expectedShipDate || "",
-                        expectedArrivalDate: poData.expectedArrivalDate || "",
-                      });
+                      formik.setFieldValue(
+                        "expectedShipDate",
+                        poData.expectedShipDate || ""
+                      );
+                      formik.setFieldValue(
+                        "expectedArrivalDate",
+                        poData.expectedArrivalDate || ""
+                      );
                     }}
                     style={{ color: "var(--color-text-primary)" }}
                   >
@@ -850,25 +913,27 @@ function PODetailContent() {
                     Cancel
                   </Button>
                   <Button
-                    type="submit"
+                    type="button"
                     disabled={isSaving || !formik.isValid}
+                    onClick={() => void persistPurchaseOrder(formik.values)}
                     style={{
-                      background: isSaving || !formik.isValid
-                        ? "var(--color-disabled-bg)"
-                        : "var(--color-primary)",
-                      color: isSaving || !formik.isValid
-                        ? "var(--color-disabled-text)"
-                        : "var(--color-text-dark)",
+                      background:
+                        isSaving || !formik.isValid
+                          ? "var(--color-disabled-bg)"
+                          : "var(--color-primary)",
+                      color:
+                        isSaving || !formik.isValid
+                          ? "var(--color-disabled-text)"
+                          : "var(--color-text-dark)",
                       fontWeight: "600",
                     }}
                   >
                     <FiSave size={16} style={{ marginRight: "6px" }} />
-                    {isSaving ? "Saving..." : "Save Changes"}
+                    {isSaving ? "Saving..." : "Save dates"}
                   </Button>
                 </Flex>
               )}
             </Flex>
-          </form>
         </Flex>
       </Card>
 
@@ -957,6 +1022,7 @@ function PODetailContent() {
                       <Button
                         size="1"
                         variant="ghost"
+                        disabled={isPoCompleted}
                         onClick={() => {
                           setLineForStatusEdit(line);
                           setNewStatus(line.status);
@@ -967,7 +1033,11 @@ function PODetailContent() {
                           color: "var(--color-text-secondary)",
                           fontSize: "11px"
                         }}
-                        title="Update status"
+                        title={
+                          isPoCompleted
+                            ? "Status cannot be changed after delivery"
+                            : "Update status"
+                        }
                       >
                         <FiEdit size={12} />
                       </Button>
@@ -1009,18 +1079,18 @@ function PODetailContent() {
                   </Table.Cell>
                   <Table.Cell>
                     <Text style={{ color: "var(--color-text-primary)" }}>
-                      {line.dueDate ? new Date(line.dueDate).toLocaleDateString() : "-"}
+                      {line.dueDate ? formatAppDate(line.dueDate, "-") : "-"}
                     </Text>
                   </Table.Cell>
                   <Table.Cell>
                     <Text style={{ color: "var(--color-text-primary)" }}>
-                      {line.expectedShipDate ? new Date(line.expectedShipDate).toLocaleDateString() : "-"}
+                      {line.expectedShipDate ? formatAppDate(line.expectedShipDate, "-") : "-"}
                     </Text>
                   </Table.Cell>
                   <Table.Cell>
                     <Text style={{ color: "var(--color-text-primary)" }}>
                       {line.expectedArrivalDate
-                        ? new Date(line.expectedArrivalDate).toLocaleDateString()
+                        ? formatAppDate(line.expectedArrivalDate, "-")
                         : "-"}
                     </Text>
                   </Table.Cell>
@@ -1067,7 +1137,7 @@ function PODetailContent() {
         onOpenChange={setDeletePODialogOpen}
         onConfirm={handleDeletePO}
         title="Confirm Delete Purchase Order"
-        description="Are you sure you want to delete this purchase order? This action can only be performed if the PO status is 'In Production' and cannot be undone."
+        description="Are you sure you want to delete this purchase order? This action can only be performed when the PO is deletable (e.g. Started) and cannot be undone."
         isLoading={isDeletingPO}
       />
 
@@ -1412,7 +1482,7 @@ function PODetailContent() {
                                 by {event.markedBy}
                               </Text>
                               <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
-                                {new Date(event.markedAt).toLocaleString()}
+                                {formatAppDateTime(event.markedAt, "—")}
                               </Text>
                             </Flex>
                           </Flex>
@@ -1526,8 +1596,11 @@ function PODetailContent() {
                     <Text size="2" weight="medium" style={{ color: "var(--color-text-secondary)" }}>
                       Status:
                     </Text>
-                    <Badge color={getStatusColor(overviewData.status)} size="2">
-                      {getStatusLabel(overviewData.status)}
+                    <Badge
+                      color={poHeaderStatusBadgeColor(mapPoHeaderStatus(overviewData.status))}
+                      size="2"
+                    >
+                      {poHeaderStatusLabel(mapPoHeaderStatus(overviewData.status))}
                     </Badge>
                   </Flex>
                 </Flex>
@@ -1605,7 +1678,7 @@ function PODetailContent() {
                                         by {event.recorder_name}
                                       </Text>
                                       <Text size="1" style={{ color: "var(--color-text-secondary)" }}>
-                                        {new Date(event.created_at).toLocaleString()}
+                                        {formatAppDateTime(event.created_at, "—")}
                                       </Text>
                                       {event.notes && (
                                         <Text size="1" style={{ color: "var(--color-text-secondary)", fontStyle: "italic" }}>
@@ -1679,7 +1752,17 @@ function PODetailContent() {
                 </Text>
                 <Select.Root
                   value={newStatus}
-                  onValueChange={(value) => setNewStatus(value)}
+                  disabled={isSavingLine || isPoCompleted}
+                  onValueChange={async (value) => {
+                    if (!lineForStatusEdit || value === lineForStatusEdit.status) return;
+                    setNewStatus(value);
+                    const ok = await handleUpdateLineStatus(lineForStatusEdit.id, value);
+                    if (ok) {
+                      setStatusEditDialogOpen(false);
+                      setLineForStatusEdit(null);
+                      setNewStatus("");
+                    }
+                  }}
                 >
                   <Select.Trigger
                     id="status"
@@ -1691,11 +1774,16 @@ function PODetailContent() {
                     }}
                   />
                   <Select.Content>
-                    {poData && getStatusOptions(poData.shipmentType).map((option) => (
-                      <Select.Item key={option.value} value={option.value}>
-                        {option.label}
-                      </Select.Item>
-                    ))}
+                    {poData &&
+                      lineForStatusEdit &&
+                      getLineStatusOptions(poData.shipmentType, lineForStatusEdit.status, {
+                        vendorHideDeliveredInHouse:
+                          isVendorUser && poData.shipmentType === "in_house",
+                      }).map((option) => (
+                        <Select.Item key={option.value} value={option.value}>
+                          {option.label}
+                        </Select.Item>
+                      ))}
                   </Select.Content>
                 </Select.Root>
               </Box>
@@ -1710,27 +1798,9 @@ function PODetailContent() {
                 disabled={isSavingLine}
                 style={{ color: "var(--color-text-primary)" }}
               >
-                Cancel
+                Close
               </Button>
             </Dialog.Close>
-            <Button
-              onClick={() => {
-                if (lineForStatusEdit && newStatus) {
-                  handleUpdateLineStatus(lineForStatusEdit.id, newStatus);
-                  setStatusEditDialogOpen(false);
-                  setLineForStatusEdit(null);
-                  setNewStatus("");
-                }
-              }}
-              disabled={isSavingLine || !newStatus}
-              style={{
-                background: isSavingLine || !newStatus ? "var(--color-disabled-bg)" : "var(--color-primary)",
-                color: isSavingLine || !newStatus ? "var(--color-disabled-text)" : "var(--color-text-dark)",
-                fontWeight: "600",
-              }}
-            >
-              {isSavingLine ? "Updating..." : "Update Status"}
-            </Button>
           </Flex>
         </Dialog.Content>
       </Dialog.Root>

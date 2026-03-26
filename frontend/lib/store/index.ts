@@ -13,6 +13,7 @@ import storage from "redux-persist/lib/storage";
 import authReducer from "./authSlice";
 import clientsReducer from "./clientsSlice";
 import vendorsReducer from "./vendorsSlice";
+import usersReducer from "./usersSlice";
 import skusReducer from "./skusSlice";
 import salesOrdersReducer from "./salesOrdersSlice";
 import purchaseOrdersReducer from "./purchaseOrdersSlice";
@@ -21,6 +22,7 @@ const rootReducer = combineReducers({
   auth: authReducer,
   clients: clientsReducer,
   vendors: vendorsReducer,
+  users: usersReducer,
   skus: skusReducer,
   salesOrders: salesOrdersReducer,
   purchaseOrders: purchaseOrdersReducer,

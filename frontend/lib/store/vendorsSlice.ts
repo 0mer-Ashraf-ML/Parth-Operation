@@ -2,6 +2,18 @@ import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { toast } from "react-toastify";
 import * as vendorsService from "../api/services/vendorsService";
 
+export interface VendorAddress {
+  id?: number;
+  label: string;
+  address_line_1: string;
+  address_line_2: string | null;
+  city: string;
+  state: string;
+  zip_code: string;
+  country: string;
+  is_default: boolean;
+}
+
 export interface Vendor {
   id: number;
   company_name: string;
@@ -12,6 +24,7 @@ export interface Vendor {
   lead_time_weeks?: number;
   created_at: string;
   updated_at?: string;
+  addresses?: VendorAddress[];
 }
 
 interface VendorsState {
@@ -27,6 +40,18 @@ const initialState: VendorsState = {
   error: null,
   lastFetched: null,
 };
+
+/** Body for POST/PATCH `/vendors/{id}/addresses` */
+export interface VendorAddressRequest {
+  label: string;
+  address_line_1: string;
+  address_line_2?: string;
+  city: string;
+  state: string;
+  zip_code: string;
+  country: string;
+  is_default: boolean;
+}
 
 // Create vendor request interface
 export interface CreateVendorRequest {
@@ -114,6 +139,64 @@ export const deleteVendorAsync = createAsyncThunk(
       return vendorId;
     } catch (error: any) {
       return rejectWithValue(error.message || "Failed to deactivate vendor");
+    }
+  }
+);
+
+export const createVendorAddressAsync = createAsyncThunk(
+  "vendors/createVendorAddress",
+  async (
+    { vendorId, addressData }: { vendorId: number; addressData: VendorAddressRequest },
+    { rejectWithValue }
+  ) => {
+    try {
+      const address = await vendorsService.createVendorAddress(vendorId, addressData);
+      toast.success("Address created successfully");
+      return { vendorId, address };
+    } catch (error: any) {
+      const errorMessage = error.message || "Failed to create address";
+      toast.error(errorMessage);
+      return rejectWithValue(errorMessage);
+    }
+  }
+);
+
+export const updateVendorAddressAsync = createAsyncThunk(
+  "vendors/updateVendorAddress",
+  async (
+    {
+      vendorId,
+      addressId,
+      addressData,
+    }: { vendorId: number; addressId: number; addressData: VendorAddressRequest },
+    { rejectWithValue }
+  ) => {
+    try {
+      const address = await vendorsService.updateVendorAddress(vendorId, addressId, addressData);
+      toast.success("Address updated successfully");
+      return { vendorId, address };
+    } catch (error: any) {
+      const errorMessage = error.message || "Failed to update address";
+      toast.error(errorMessage);
+      return rejectWithValue(errorMessage);
+    }
+  }
+);
+
+export const deleteVendorAddressAsync = createAsyncThunk(
+  "vendors/deleteVendorAddress",
+  async (
+    { vendorId, addressId }: { vendorId: number; addressId: number },
+    { rejectWithValue }
+  ) => {
+    try {
+      await vendorsService.deleteVendorAddress(vendorId, addressId);
+      toast.success("Address deleted successfully");
+      return { vendorId, addressId };
+    } catch (error: any) {
+      const errorMessage = error.message || "Failed to delete address";
+      toast.error(errorMessage);
+      return rejectWithValue(errorMessage);
     }
   }
 );

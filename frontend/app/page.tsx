@@ -190,8 +190,8 @@ function HomeContent() {
   }), []);
 
   return (
-    <Flex direction="column" gap="4">
-      <Flex align="center" justify="between" wrap="wrap" gap="4">
+    <Flex direction="column" gap="4" className="w-full min-w-0 max-w-full">
+      <Flex align="center" justify="between" wrap="wrap" gap="4" className="min-w-0 max-w-full">
         <Box>
           <Heading size={{ initial: "6", md: "8" }}>Dashboard</Heading>
           <Text size="3" style={{ color: "var(--color-text-secondary)", marginTop: "4px" }}>
@@ -205,8 +205,8 @@ function HomeContent() {
       </Flex>
 
       {/* KPI Cards */}
-      <Flex gap="4" wrap="wrap">
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+      <Flex gap="4" wrap="wrap" className="min-w-0 max-w-full">
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
               <Box
@@ -234,7 +234,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
               <Box
@@ -262,7 +262,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
               <Box
@@ -290,7 +290,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
               <Box
@@ -320,11 +320,11 @@ function HomeContent() {
       </Flex>
 
       {/* Charts Row */}
-      <Flex gap="4" wrap="wrap">
+      <Flex gap="4" wrap="wrap" className="min-w-0 max-w-full">
         {/* Sales Trend Chart */}
-        <Card style={{ flex: "2", minWidth: "400px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
-          <Flex direction="column" gap="3">
-            <Flex align="center" justify="between">
+        <Card style={{ flex: "2 1 280px", minWidth: "min(100%, 400px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+          <Flex direction="column" gap="3" className="min-w-0 max-w-full">
+            <Flex align="center" justify="between" wrap="wrap" gap="2" className="min-w-0">
               <Heading size={{ initial: "4", md: "5" }} style={{ color: "var(--color-text-primary)" }}>
                 Sales Trend
               </Heading>
@@ -332,19 +332,19 @@ function HomeContent() {
                 Last 6 months
               </Text>
             </Flex>
-            <Box style={{ height: "300px", width: "100%" }}>
+            <Box style={{ height: "300px", width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden" }}>
               {chartsReady && <AgCharts options={salesChartOptions} />}
             </Box>
           </Flex>
         </Card>
 
         {/* Order Status Chart */}
-        <Card style={{ flex: "1", minWidth: "300px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
-          <Flex direction="column" gap="3">
+        <Card style={{ flex: "1 1 280px", minWidth: "min(100%, 300px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+          <Flex direction="column" gap="3" className="min-w-0 max-w-full">
             <Heading size={{ initial: "4", md: "5" }} style={{ color: "var(--color-text-primary)" }}>
               Orders by Status
             </Heading>
-            <Box style={{ height: "300px", width: "100%" }}>
+            <Box style={{ height: "300px", width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden" }}>
               {chartsReady && <AgCharts options={orderStatusChartOptions} />}
             </Box>
           </Flex>
@@ -352,32 +352,32 @@ function HomeContent() {
       </Flex>
 
       {/* Revenue Distribution and Recent Activity */}
-      <Flex gap="4" wrap="wrap">
+      <Flex gap="4" wrap="wrap" className="min-w-0 max-w-full">
         {/* Revenue Distribution Chart */}
-        <Card style={{ flex: "1", minWidth: "400px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
-          <Flex direction="column" gap="3">
+        <Card style={{ flex: "1 1 280px", minWidth: "min(100%, 400px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+          <Flex direction="column" gap="3" className="min-w-0 max-w-full">
             <Heading size={{ initial: "4", md: "5" }} style={{ color: "var(--color-text-primary)" }}>
               Revenue by Client
             </Heading>
-            <Box style={{ height: "300px", width: "100%" }}>
+            <Box style={{ height: "300px", width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden" }}>
               {chartsReady && <AgCharts options={revenueChartOptions} />}
             </Box>
           </Flex>
         </Card>
 
         {/* Recent Activity */}
-        <Card style={{ flex: "1", minWidth: "400px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
-          <Flex direction="column" gap="3">
+        <Card style={{ flex: "1 1 280px", minWidth: "min(100%, 400px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+          <Flex direction="column" gap="3" className="min-w-0 max-w-full">
             <Heading size={{ initial: "4", md: "5" }} style={{ color: "var(--color-text-primary)" }}>
               Recent Activity
             </Heading>
-            <Box className="table-scroll-x w-full min-w-0">
+            <Box className="w-full min-w-0 max-w-full overflow-x-auto">
             <Table.Root>
               <Table.Body>
                 {mockRecentActivity.map((activity) => (
                   <Table.Row key={activity.id}>
                     <Table.Cell>
-                      <Flex align="center" gap="3">
+                      <Flex align="center" gap="3" wrap="wrap" className="min-w-0 max-w-full">
                         <Box
                           style={{
                             padding: "8px",
@@ -393,8 +393,8 @@ function HomeContent() {
                           {activity.type === "Client" && <FiUsers size={16} style={{ color: "#10b981" }} />}
                           {activity.type === "SKU" && <FiPackage size={16} style={{ color: "#8b5cf6" }} />}
                         </Box>
-                        <Box style={{ flex: 1 }}>
-                          <Text size="2" weight="medium" style={{ color: "var(--color-text-primary)" }}>
+                        <Box style={{ flex: "1 1 120px", minWidth: 0 }}>
+                          <Text size="2" mr="2" weight="medium" style={{ color: "var(--color-text-primary)", wordBreak: "break-word" }}>
                             {activity.description}
                           </Text>
                           <Text size="1" style={{ color: "var(--color-text-secondary)", marginTop: "4px" }}>
@@ -410,6 +410,7 @@ function HomeContent() {
                               ? "yellow"
                               : "blue"
                           }
+                          style={{ flexShrink: 0 }}
                         >
                           {activity.type}
                         </Badge>
@@ -425,8 +426,8 @@ function HomeContent() {
       </Flex>
 
       {/* Quick Stats */}
-      <Flex gap="4" wrap="wrap">
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+      <Flex gap="4" wrap="wrap" className="min-w-0 max-w-full">
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2" align="center">
             <FiFileText size={24} style={{ color: "var(--color-primary)" }} />
             <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
@@ -438,7 +439,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2" align="center">
             <FiTruck size={24} style={{ color: "#3b82f6" }} />
             <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
@@ -450,7 +451,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2" align="center">
             <FiPackage size={24} style={{ color: "#10b981" }} />
             <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
@@ -462,7 +463,7 @@ function HomeContent() {
           </Flex>
         </Card>
 
-        <Card style={{ flex: "1", minWidth: "200px", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
+        <Card style={{ flex: "1 1 auto", minWidth: "min(100%, 200px)", maxWidth: "100%", padding: "1.5rem", background: "var(--color-dark-bg-secondary)" }}>
           <Flex direction="column" gap="2" align="center">
             <FiTruck size={24} style={{ color: "#8b5cf6" }} />
             <Text size="2" style={{ color: "var(--color-text-secondary)" }}>

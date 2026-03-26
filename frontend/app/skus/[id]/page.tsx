@@ -16,8 +16,9 @@ import {
   Select,
   Separator,
   Table,
+  Dialog,
 } from "@radix-ui/themes";
-import { FiArrowLeft, FiSave, FiTrash2, FiPlus, FiX } from "react-icons/fi";
+import { FiArrowLeft, FiSave, FiTrash2, FiPlus, FiX, FiEdit2 } from "react-icons/fi";
 import { 
   fetchSKUById, 
   createSKU, 
@@ -26,10 +27,12 @@ import {
   replaceTierPrices,
   deleteTierPrice,
   fetchSKUVendors,
+  updateSKUVendor,
   linkVendorToSKU,
   unlinkVendorFromSKU,
   type SKUApiResponse,
-  type SKUVendorResponse
+  type SKUVendorResponse,
+  type CreateSKUVendorRequest,
 } from "@/lib/api/services/skusService";
 import { fetchVendors } from "@/lib/api/services/vendorsService";
 import { toast } from "react-toastify";
@@ -150,9 +153,16 @@ function SKUDetailContent() {
   const [isLoadingSkuVendors, setIsLoadingSkuVendors] = useState(false);
   const [isLinkingVendor, setIsLinkingVendor] = useState(false);
   const [selectedVendorToLink, setSelectedVendorToLink] = useState<string>("");
+  const [linkVendorCost, setLinkVendorCost] = useState("");
+  const [linkVendorModalOpen, setLinkVendorModalOpen] = useState(false);
   const [deleteVendorLinkDialogOpen, setDeleteVendorLinkDialogOpen] = useState(false);
   const [vendorLinkToDelete, setVendorLinkToDelete] = useState<number | null>(null);
   const [isDeletingVendorLink, setIsDeletingVendorLink] = useState(false);
+  const [editVendorModalOpen, setEditVendorModalOpen] = useState(false);
+  const [vendorLinkToEdit, setVendorLinkToEdit] = useState<SKUVendorResponse | null>(null);
+  const [editVendorCost, setEditVendorCost] = useState("");
+  const [editVendorSetDefault, setEditVendorSetDefault] = useState("keep");
+  const [isSavingVendorModal, setIsSavingVendorModal] = useState(false);
   
   // Track original values to detect changes
   const [originalBasicInfo, setOriginalBasicInfo] = useState<{
@@ -287,15 +297,28 @@ function SKUDetailContent() {
         return;
       }
       
-      await linkVendorToSKU(parseInt(skuId), {
+      const trimmedCost = linkVendorCost.trim();
+      const payload: CreateSKUVendorRequest = {
         vendor_id: vendorId,
         is_default: false,
-      });
+      };
+      if (trimmedCost !== "") {
+        const n = parseFloat(trimmedCost);
+        if (Number.isNaN(n)) {
+          toast.error("Vendor cost must be a valid number");
+          return;
+        }
+        payload.vendor_cost = n;
+      }
+
+      await linkVendorToSKU(parseInt(skuId), payload);
       
       // Reload SKU vendors
       const updatedVendors = await fetchSKUVendors(parseInt(skuId));
       setSkuVendors(updatedVendors);
       setSelectedVendorToLink("");
+      setLinkVendorCost("");
+      setLinkVendorModalOpen(false);
       toast.success("Vendor linked successfully");
     } catch (error: any) {
       toast.error(error.message || "Failed to link vendor");
@@ -327,6 +350,66 @@ function SKUDetailContent() {
       setIsDeletingVendorLink(false);
       setDeleteVendorLinkDialogOpen(false);
       setVendorLinkToDelete(null);
+    }
+  };
+
+  const openEditVendorModal = (skuVendor: SKUVendorResponse) => {
+    setVendorLinkToEdit(skuVendor);
+    setEditVendorCost(
+      skuVendor.vendor_cost != null && !Number.isNaN(Number(skuVendor.vendor_cost))
+        ? String(Number(skuVendor.vendor_cost))
+        : ""
+    );
+    setEditVendorSetDefault(skuVendor.is_default ? "already" : "keep");
+    setEditVendorModalOpen(true);
+  };
+
+  const handleSaveVendorModal = async () => {
+    if (!vendorLinkToEdit || isNew) return;
+    const editedCost = editVendorCost.trim();
+    const payload: { vendor_cost?: number | null; is_default?: boolean } = {};
+
+    if (editedCost === "") {
+      payload.vendor_cost = null;
+    } else {
+      const n = parseFloat(editedCost);
+      if (Number.isNaN(n)) {
+        toast.error("Vendor cost must be a valid number");
+        return;
+      }
+      payload.vendor_cost = n;
+    }
+
+    if (!vendorLinkToEdit.is_default && editVendorSetDefault === "set") {
+      payload.is_default = true;
+    }
+
+    try {
+      setIsSavingVendorModal(true);
+      await updateSKUVendor(parseInt(skuId), vendorLinkToEdit.vendor_id, payload);
+
+      if (payload.is_default) {
+        formik.setFieldValue("defaultVendor", vendorLinkToEdit.vendor_id.toString());
+        setOriginalBasicInfo((prev) =>
+          prev
+            ? {
+                ...prev,
+                defaultVendor: vendorLinkToEdit.vendor_id.toString(),
+              }
+            : prev
+        );
+      }
+
+      const updatedVendors = await fetchSKUVendors(parseInt(skuId));
+      setSkuVendors(updatedVendors);
+      setEditVendorModalOpen(false);
+      setVendorLinkToEdit(null);
+      toast.success("Vendor link updated");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update vendor link");
+      console.error("Error updating vendor link:", error);
+    } finally {
+      setIsSavingVendorModal(false);
     }
   };
 
@@ -566,6 +649,7 @@ function SKUDetailContent() {
                     Status *
                   </Text>
                   <Select.Root
+                  size="3"
                     value={formik.values.status}
                     onValueChange={(value) => formik.setFieldValue("status", value)}
                   >
@@ -670,6 +754,7 @@ function SKUDetailContent() {
                     Default Vendor
                   </Text>
                   <Select.Root
+                  size={"3"}
                     value={formik.values.defaultVendor}
                     onValueChange={(value) => formik.setFieldValue("defaultVendor", value)}
                     disabled={isLoadingVendors}
@@ -715,11 +800,13 @@ function SKUDetailContent() {
                     Secondary Vendor
                   </Text>
                   <Select.Root
+                  size="3"
                     value={formik.values.secondaryVendor}
                     onValueChange={(value) => formik.setFieldValue("secondaryVendor", value)}
                     disabled={isLoadingVendors}
                   >
                     <Select.Trigger
+                    
                       id="secondaryVendor"
                       style={{
                         background: "var(--color-dark-bg-secondary)",
@@ -754,6 +841,7 @@ function SKUDetailContent() {
                     Track Inventory
                   </Text>
                   <Select.Root
+                  size="3"
                     value={formik.values.trackInventory ? "true" : "false"}
                     onValueChange={(value) => {
                       formik.setFieldValue("trackInventory", value === "true");
@@ -1033,56 +1121,28 @@ function SKUDetailContent() {
           {!isNew && (
             <Card className="p-6 sm:p-8">
               {/* Native div so flex row isn’t broken by Radix block widths; heading stays narrow, actions ml-auto */}
-              <div
-                className="mb-6 flex w-full min-w-0 flex-col md:flex-row md:flex-nowrap md:items-center md:justify-between md:gap-6"
-              >
+              <div className="mb-6 flex w-full min-w-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                 <Heading
                   size={{ initial: "4", md: "5" }}
-                  className="w-full min-w-0 shrink-0 basis-auto md:w-auto md:max-w-[min(100%,60%)]"
+                  className="w-full min-w-0 shrink-0 sm:w-auto"
                 >
                   Linked Vendors
                 </Heading>
-                <div className="mt-5 flex w-full min-w-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-4 md:mt-0 md:ml-auto md:w-auto md:max-w-full md:shrink-0 md:justify-end md:gap-4">
-                  <Select.Root
-                    value={selectedVendorToLink}
-                    onValueChange={setSelectedVendorToLink}
-                    disabled={isLinkingVendor || isLoadingVendors}
-                  >
-                    <Select.Trigger
-                      placeholder="Select vendor to link"
-                      className="w-full min-w-0 sm:min-w-[200px] sm:max-w-md sm:flex-1 md:max-w-sm md:flex-none"
-                      style={{
-                        background: "var(--color-dark-bg-secondary)",
-                        border: "1px solid var(--color-dark-bg-tertiary)",
-                        color: "var(--color-text-primary)",
-                      }}
-                    />
-                    <Select.Content>
-                      {vendors
-                        .filter(v => !skuVendors.some(sv => sv.vendor_id === v.id))
-                        .map((vendor) => (
-                          <Select.Item key={vendor.id.toString()} value={vendor.id.toString()}>
-                            {vendor.company_name}
-                          </Select.Item>
-                        ))}
-                    </Select.Content>
-                  </Select.Root>
-                  <Button
-                    type="button"
-                    size="2"
-                    onClick={handleLinkVendor}
-                    disabled={!selectedVendorToLink || isLinkingVendor || isLoadingVendors}
-                    className="w-full shrink-0 sm:w-auto"
-                    style={{
-                      background: "var(--color-primary)",
-                      color: "var(--color-text-dark)",
-                      fontWeight: "600",
-                    }}
-                  >
-                    <FiPlus size={16} style={{ marginRight: "4px" }} />
-                    {isLinkingVendor ? "Linking..." : "Link Vendor"}
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  size="2"
+                  onClick={() => setLinkVendorModalOpen(true)}
+                  disabled={isLoadingVendors}
+                  className="w-full shrink-0 sm:w-auto"
+                  style={{
+                    background: "var(--color-primary)",
+                    color: "var(--color-text-dark)",
+                    fontWeight: "600",
+                  }}
+                >
+                  <FiPlus size={16} style={{ marginRight: "4px" }} />
+                  Link vendor
+                </Button>
               </div>
 
               {isLoadingSkuVendors ? (
@@ -1105,6 +1165,9 @@ function SKUDetailContent() {
                         </Table.ColumnHeaderCell>
                         <Table.ColumnHeaderCell style={{ color: "var(--color-text-primary)" }}>
                           Status
+                        </Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell style={{ color: "var(--color-text-primary)" }}>
+                          Vendor cost
                         </Table.ColumnHeaderCell>
                         <Table.ColumnHeaderCell style={{ color: "var(--color-text-primary)", width: "100px" }}>
                           Actions
@@ -1133,20 +1196,39 @@ function SKUDetailContent() {
                               )}
                             </Table.Cell>
                             <Table.Cell>
-                              {!skuVendor.is_default && (
+                              <Text size="3" style={{ color: "var(--color-text-primary)" }}>
+                                {skuVendor.vendor_cost != null &&
+                                !Number.isNaN(Number(skuVendor.vendor_cost))
+                                  ? `$${Number(skuVendor.vendor_cost).toFixed(2)}`
+                                  : "—"}
+                              </Text>
+                            </Table.Cell>
+                            <Table.Cell>
+                              <Flex gap="2">
                                 <Button
                                   type="button"
                                   size="1"
                                   variant="ghost"
-                                  onClick={() => {
-                                    setVendorLinkToDelete(skuVendor.id);
-                                    setDeleteVendorLinkDialogOpen(true);
-                                  }}
-                                  style={{ color: "var(--color-error)" }}
+                                  onClick={() => openEditVendorModal(skuVendor)}
+                                  title="Edit vendor link"
                                 >
-                                  <FiTrash2 size={16} />
+                                  <FiEdit2 size={16} />
                                 </Button>
-                              )}
+                                {!skuVendor.is_default && (
+                                  <Button
+                                    type="button"
+                                    size="1"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setVendorLinkToDelete(skuVendor.id);
+                                      setDeleteVendorLinkDialogOpen(true);
+                                    }}
+                                    style={{ color: "var(--color-error)" }}
+                                  >
+                                    <FiTrash2 size={16} />
+                                  </Button>
+                                )}
+                              </Flex>
                             </Table.Cell>
                           </Table.Row>
                         );
@@ -1243,6 +1325,219 @@ function SKUDetailContent() {
         description="Are you sure you want to delete this tier price? This action cannot be undone."
         isLoading={isDeletingTier}
       />
+
+      {/* Link vendor modal */}
+      <Dialog.Root
+        open={linkVendorModalOpen}
+        onOpenChange={(open) => {
+          setLinkVendorModalOpen(open);
+          if (!open) {
+            setSelectedVendorToLink("");
+            setLinkVendorCost("");
+          }
+        }}
+      >
+        <Dialog.Content style={{ maxWidth: 440 }}>
+          <Dialog.Title>Link vendor</Dialog.Title>
+          <Dialog.Description size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
+            Select a vendor to link to this SKU. Vendor cost is optional.
+          </Dialog.Description>
+
+          <Flex direction="column" gap="4">
+            <Box>
+              <Text size="2" weight="medium" mb="2" as="label" htmlFor="link-vendor-select" style={{ display: "block", color: "var(--color-text-primary)" }}>
+                Vendor *
+              </Text>
+              <Select.Root
+                size="3"
+                value={selectedVendorToLink}
+                onValueChange={setSelectedVendorToLink}
+                disabled={isLinkingVendor || isLoadingVendors}
+              >
+                <Select.Trigger
+                  id="link-vendor-select"
+                  placeholder="Select vendor"
+                  style={{
+                    width: "100%",
+                    background: "var(--color-dark-bg-secondary)",
+                    border: "1px solid var(--color-dark-bg-tertiary)",
+                    color: "var(--color-text-primary)",
+                  }}
+                />
+                <Select.Content>
+                  {vendors
+                    .filter((v) => !skuVendors.some((sv) => sv.vendor_id === v.id))
+                    .map((vendor) => (
+                      <Select.Item key={vendor.id.toString()} value={vendor.id.toString()}>
+                        {vendor.company_name}
+                      </Select.Item>
+                    ))}
+                </Select.Content>
+              </Select.Root>
+              {!isLoadingVendors &&
+                vendors.filter((v) => !skuVendors.some((sv) => sv.vendor_id === v.id)).length === 0 && (
+                  <Text size="2" mt="2" style={{ color: "var(--color-text-secondary)" }}>
+                    All vendors are already linked, or no vendors are available.
+                  </Text>
+                )}
+            </Box>
+
+            <Box>
+              <Text size="2" weight="medium" mb="2" as="label" htmlFor="link-vendor-cost" style={{ display: "block", color: "var(--color-text-primary)" }}>
+                Vendor cost (optional)
+              </Text>
+              <TextField.Root
+                id="link-vendor-cost"
+                size="3"
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min={0}
+                placeholder="e.g. 1.75"
+                value={linkVendorCost}
+                onChange={(e) => setLinkVendorCost(e.target.value)}
+                disabled={isLinkingVendor || isLoadingVendors}
+                style={{
+                  width: "100%",
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+            </Box>
+
+            <Flex gap="3" justify="end" mt="2">
+              <Dialog.Close>
+                <Button variant="soft" color="gray" disabled={isLinkingVendor} type="button">
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button
+                type="button"
+                onClick={() => void handleLinkVendor()}
+                disabled={
+                  !selectedVendorToLink ||
+                  isLinkingVendor ||
+                  isLoadingVendors ||
+                  vendors.filter((v) => !skuVendors.some((sv) => sv.vendor_id === v.id)).length === 0
+                }
+                style={{
+                  background: "var(--color-primary)",
+                  color: "var(--color-text-dark)",
+                  fontWeight: "600",
+                }}
+              >
+                {isLinkingVendor ? "Linking…" : "Link vendor"}
+              </Button>
+            </Flex>
+          </Flex>
+        </Dialog.Content>
+      </Dialog.Root>
+
+      {/* Edit vendor link modal */}
+      <Dialog.Root
+        open={editVendorModalOpen}
+        onOpenChange={(open) => {
+          setEditVendorModalOpen(open);
+          if (!open) {
+            setVendorLinkToEdit(null);
+            setEditVendorCost("");
+            setEditVendorSetDefault("keep");
+          }
+        }}
+      >
+        <Dialog.Content style={{ maxWidth: 440 }}>
+          <Dialog.Title>Edit vendor link</Dialog.Title>
+          <Dialog.Description size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
+            Update linked vendor data for this SKU.
+          </Dialog.Description>
+
+          <Flex direction="column" gap="4">
+            <Box>
+              <Text size="2" weight="medium" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+                Vendor
+              </Text>
+              <Text size="3" style={{ color: "var(--color-text-primary)" }}>
+                {vendorLinkToEdit?.vendor_name ||
+                  vendors.find((v) => v.id === vendorLinkToEdit?.vendor_id)?.company_name ||
+                  "Unknown vendor"}
+              </Text>
+            </Box>
+
+            <Box>
+              <Text size="2" weight="medium" mb="2" as="label" htmlFor="edit-vendor-cost" style={{ display: "block", color: "var(--color-text-primary)" }}>
+                Vendor cost (optional)
+              </Text>
+              <TextField.Root
+                id="edit-vendor-cost"
+                size="3"
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min={0}
+                placeholder="e.g. 1.75"
+                value={editVendorCost}
+                onChange={(e) => setEditVendorCost(e.target.value)}
+                disabled={isSavingVendorModal}
+                style={{
+                  width: "100%",
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+            </Box>
+
+            {!vendorLinkToEdit?.is_default && (
+              <Box>
+                <Text size="2" weight="medium" mb="2" as="label" htmlFor="edit-vendor-default" style={{ display: "block", color: "var(--color-text-primary)" }}>
+                  Default vendor
+                </Text>
+                <Select.Root
+                  size="3"
+                  value={editVendorSetDefault}
+                  onValueChange={setEditVendorSetDefault}
+                  disabled={isSavingVendorModal}
+                >
+                  <Select.Trigger
+                    id="edit-vendor-default"
+                    style={{
+                      width: "100%",
+                      background: "var(--color-dark-bg-secondary)",
+                      border: "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                  <Select.Content>
+                    <Select.Item value="keep">Keep current default</Select.Item>
+                    <Select.Item value="set">Set this as default</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
+            )}
+
+            <Flex gap="3" justify="end" mt="2">
+              <Dialog.Close>
+                <Button variant="soft" color="gray" disabled={isSavingVendorModal} type="button">
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button
+                type="button"
+                onClick={() => void handleSaveVendorModal()}
+                disabled={!vendorLinkToEdit || isSavingVendorModal}
+                style={{
+                  background: "var(--color-primary)",
+                  color: "var(--color-text-dark)",
+                  fontWeight: "600",
+                }}
+              >
+                {isSavingVendorModal ? "Saving..." : "Save changes"}
+              </Button>
+            </Flex>
+          </Flex>
+        </Dialog.Content>
+      </Dialog.Root>
 
       {/* Delete Vendor Link Confirmation Dialog */}
       <DeleteConfirmationDialog
