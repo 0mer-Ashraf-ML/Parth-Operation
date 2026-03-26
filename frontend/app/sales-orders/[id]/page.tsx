@@ -23,7 +23,17 @@ import {
 import { fetchSKUs } from "@/lib/api/services/skusService";
 import DeleteConfirmationDialog from "@/components/DeleteConfirmationDialog";
 import { fetchClientById } from "@/lib/api/services/clientsService";
+import { isClientShipToAddress } from "@/lib/store/clientsSlice";
 import { toast } from "react-toastify";
+import { formatAppDate } from "@/lib/formatDate";
+import {
+  formatSoStatus,
+  formatPaymentStatus,
+  soStatusBadgeColor,
+  paymentStatusBadgeColor,
+  type SoUiStatus,
+  type PaymentUiStatus,
+} from "@/lib/salesOrderStatusDisplay";
 import { useFormik } from "formik";
 import * as yup from "yup";
 import {
@@ -58,13 +68,13 @@ import {
   FiSave,
   FiTrash2,
   FiEdit,
-  FiX
+  FiX,
+  FiPlayCircle,
 } from "react-icons/fi";
-
-type SOStatus = "Pending" | "Partial Invoiced" | "Fully Invoiced";
 
 interface SOLineItem {
   id: string;
+  lineNumber: number;
   skuId: string;
   skuCode: string;
   skuName: string;
@@ -82,8 +92,8 @@ interface SalesOrderDetail {
   clientId: string;
   clientName: string;
   orderDate: string;
-  dueDate?: string;
-  status: SOStatus;
+  status: SoUiStatus;
+  paymentStatus: PaymentUiStatus;
   shipToAddressId?: number | null;
   shipToAddress: {
     addressLine1: string;
@@ -102,7 +112,6 @@ interface SOUpdateFormData {
   orderNumber: string;
   shipToAddressId: string;
   orderDate: string;
-  dueDate: string;
   notes: string;
 }
 
@@ -110,46 +119,9 @@ const updateValidationSchema = yup.object({
   orderNumber: yup.string().required("Order number is required"),
   shipToAddressId: yup.string(),
   orderDate: yup.string(),
-  dueDate: yup.string(),
   notes: yup.string(),
 });
 
-// Mock function to fetch client data - replace with actual API call
-const fetchClientData = async (clientId: string): Promise<{ autoInvoice: boolean } | null> => {
-  // Mock data - replace with actual API call
-  const mockClients: Record<string, { autoInvoice: boolean }> = {
-    "1": { autoInvoice: true },
-    "2": { autoInvoice: false },
-    "3": { autoInvoice: true },
-    "4": { autoInvoice: false },
-  };
-  return mockClients[clientId] || null;
-};
-
-// Mock function to generate invoice - replace with actual API call
-const generateInvoice = async (soId: string, lineItemId: string, quantity: number): Promise<void> => {
-  // TODO: Implement actual invoice generation API call
-  console.log(`Auto-generating invoice for SO ${soId}, line item ${lineItemId}, quantity ${quantity}`);
-  // In a real implementation, this would:
-  // 1. Create an invoice record
-  // 2. Link it to the sales order and line item
-  // 3. Calculate amounts based on client settings (tax, discount, etc.)
-  // 4. Update quantityInvoiced for the line item
-};
-
-// Helper function to map API status to frontend status
-const mapStatus = (apiStatus: string): SOStatus => {
-  switch (apiStatus.toLowerCase()) {
-    case "pending":
-      return "Pending";
-    case "partial_invoiced":
-      return "Partial Invoiced";
-    case "fully_invoiced":
-      return "Fully Invoiced";
-    default:
-      return "Pending";
-  }
-};
 
 // Helper function to map API response to frontend structure
 const mapSalesOrderDetailFromApi = async (apiSO: SalesOrderApiResponse): Promise<SalesOrderDetail> => {
@@ -192,12 +164,13 @@ const mapSalesOrderDetailFromApi = async (apiSO: SalesOrderApiResponse): Promise
     clientId: apiSO.client_id.toString(),
     clientName: apiSO.client_name,
     orderDate: apiSO.order_date || "",
-    dueDate: apiSO.due_date || "",
-    status: mapStatus(apiSO.status),
+    status: formatSoStatus(apiSO.status),
+    paymentStatus: formatPaymentStatus(apiSO.payment_status),
     shipToAddressId: apiSO.ship_to_address_id,
     shipToAddress,
     lineItems: (apiSO.lines || []).map((line: SalesOrderLineApiResponse) => ({
       id: line.id.toString(),
+      lineNumber: line.line_number,
       skuId: line.sku_id.toString(),
       skuCode: line.sku_code,
       skuName: line.sku_name,
@@ -267,7 +240,6 @@ function SODetailContent() {
       orderNumber: "",
       shipToAddressId: "",
       orderDate: "",
-      dueDate: "",
       notes: "",
     },
     validationSchema: updateValidationSchema,
@@ -280,7 +252,6 @@ function SODetailContent() {
             ? parseInt(values.shipToAddressId) 
             : null,
           order_date: values.orderDate || null,
-          due_date: values.dueDate || null,
           notes: values.notes || null,
         };
         
@@ -295,7 +266,6 @@ function SODetailContent() {
             orderNumber: updatedData.soNumber,
             shipToAddressId: updatedData.shipToAddressId?.toString() || "",
             orderDate: updatedData.orderDate || "",
-            dueDate: updatedData.dueDate || "",
             notes: updatedData.notes || "",
           });
         }
@@ -356,7 +326,6 @@ function SODetailContent() {
           orderNumber: data.soNumber,
           shipToAddressId: data.shipToAddressId?.toString() || "",
           orderDate: data.orderDate || "",
-          dueDate: data.dueDate || "",
           notes: data.notes || "",
         });
         
@@ -365,7 +334,6 @@ function SODetailContent() {
           orderNumber: data.soNumber,
           shipToAddressId: data.shipToAddressId?.toString() || "",
           orderDate: data.orderDate || "",
-          dueDate: data.dueDate || "",
           notes: data.notes || "",
         });
         
@@ -373,7 +341,8 @@ function SODetailContent() {
         if (data.clientId) {
           try {
             const client = await fetchClientById(data.clientId);
-            const addresses = (client.addresses || []).map((addr: any) => ({
+            const shipToOnly = (client.addresses || []).filter((addr: any) => isClientShipToAddress(addr));
+            const addresses = shipToOnly.map((addr: any) => ({
               id: addr.id,
               label: addr.label || `${addr.address_line_1}, ${addr.city}`,
             }));
@@ -402,31 +371,32 @@ function SODetailContent() {
       formik.values.orderNumber !== originalFormValues.orderNumber ||
       formik.values.shipToAddressId !== originalFormValues.shipToAddressId ||
       formik.values.orderDate !== originalFormValues.orderDate ||
-      formik.values.dueDate !== originalFormValues.dueDate ||
       formik.values.notes !== originalFormValues.notes
     );
   }, [formik.values, originalFormValues]);
 
-  const getStatusColor = (status: SOStatus) => {
-    switch (status) {
-      case "Pending":
-        return "orange";
-      case "Partial Invoiced":
-        return "blue";
-      case "Fully Invoiced":
-        return "green";
-      default:
-        return "gray";
-    }
-  };
-
-  const getStatusIcon = (status: SOStatus) => {
+  const getStatusIcon = (status: SoUiStatus) => {
     switch (status) {
       case "Pending":
         return <FiClock size={14} />;
-      case "Partial Invoiced":
+      case "Started":
+        return <FiPlayCircle size={14} />;
+      case "Partially Completed":
+        return <FiPackage size={14} />;
+      case "Completed":
+        return <FiCheckCircle size={14} />;
+      default:
+        return null;
+    }
+  };
+
+  const getPaymentStatusIcon = (ps: PaymentUiStatus) => {
+    switch (ps) {
+      case "Not Invoiced":
         return <FiFileText size={14} />;
-      case "Fully Invoiced":
+      case "Partially Invoiced":
+        return <FiTrendingUp size={14} />;
+      case "Fully Paid":
         return <FiCheckCircle size={14} />;
       default:
         return null;
@@ -456,7 +426,7 @@ function SODetailContent() {
     
     const skuId = parseInt(lineFormData.skuId);
     const orderedQty = parseFloat(lineFormData.orderedQty);
-    const unitPrice = lineFormData.unitPrice ? parseFloat(lineFormData.unitPrice) : 0;
+    const parsedUnitPrice = lineFormData.unitPrice ? parseFloat(lineFormData.unitPrice) : null;
     
     if (!skuId || !orderedQty) {
       toast.error("Please fill in all required fields");
@@ -466,14 +436,14 @@ function SODetailContent() {
     try {
       setIsSaving(true);
       const nextLineNumber = soData.lineItems.length > 0 
-        ? Math.max(...soData.lineItems.map((item: any) => item.lineNumber || 0)) + 1
+        ? Math.max(...soData.lineItems.map((item) => item.lineNumber || 0)) + 1
         : 1;
       
       const lineData: CreateSalesOrderLineRequest = {
         sku_id: skuId,
         line_number: nextLineNumber,
         ordered_qty: orderedQty,
-        unit_price: unitPrice,
+        ...(parsedUnitPrice && parsedUnitPrice > 0 ? { unit_price: parsedUnitPrice } : {}),
         due_date: lineFormData.dueDate || null,
       };
       
@@ -676,12 +646,20 @@ function SODetailContent() {
                 </Heading>
               </Box>
             </Flex>
-            <Badge color={getStatusColor(soData.status)} size="2">
-              <Flex align="center" gap="2">
-                {getStatusIcon(soData.status)}
-                {soData.status}
-              </Flex>
-            </Badge>
+            <Flex align="center" gap="2" wrap="wrap">
+              <Badge color={soStatusBadgeColor(soData.status)} size="2">
+                <Flex align="center" gap="2">
+                  {getStatusIcon(soData.status)}
+                  SO: {soData.status}
+                </Flex>
+              </Badge>
+              <Badge color={paymentStatusBadgeColor(soData.paymentStatus)} size="2">
+                <Flex align="center" gap="2">
+                  {getPaymentStatusIcon(soData.paymentStatus)}
+                  Payment: {soData.paymentStatus}
+                </Flex>
+              </Badge>
+            </Flex>
           </Flex>
 
           <Separator />
@@ -817,34 +795,6 @@ function SODetailContent() {
                       }}
                     />
                   </Box>
-
-                  <Box style={{ flex: "1", minWidth: "200px" }}>
-                    <Text
-                      size="2"
-                      weight="medium"
-                      mb="2"
-                      as="label"
-                      htmlFor="dueDate"
-                      className="block"
-                      style={{ color: "var(--color-text-primary)" }}
-                    >
-                      Due Date
-              </Text>
-                    <TextField.Root
-                      id="dueDate"
-                      name="dueDate"
-                      type="date"
-                      value={formik.values.dueDate}
-                      onChange={formik.handleChange}
-                      onBlur={formik.handleBlur}
-                      size="3"
-                      style={{
-                        background: "var(--color-dark-bg-secondary)",
-                        border: "1px solid var(--color-dark-bg-tertiary)",
-                        color: "var(--color-text-primary)",
-                      }}
-                    />
-            </Box>
                 </Flex>
 
               <Box>
@@ -967,7 +917,7 @@ function SODetailContent() {
                 <Table.ColumnHeaderCell style={{ color: "var(--color-text-primary)" }}>
                   <Flex align="center" gap="2">
                     <FiDollarSign size={14} />
-                    Unit Price
+                    Unit Pricesss
                   </Flex>
                 </Table.ColumnHeaderCell>
                 <Table.ColumnHeaderCell style={{ color: "var(--color-text-primary)" }}>
@@ -1030,7 +980,7 @@ function SODetailContent() {
                   </Table.Cell>
                   <Table.Cell>
                     <Text style={{ color: "var(--color-text-primary)" }}>
-                      {item.dueDate ? new Date(item.dueDate).toLocaleDateString() : "-"}
+                      {item.dueDate ? formatAppDate(item.dueDate, "-") : "-"}
                     </Text>
                   </Table.Cell>
                   <Table.Cell>

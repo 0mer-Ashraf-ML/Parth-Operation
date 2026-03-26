@@ -9,6 +9,8 @@ import { ColDef, ICellRendererParams } from "ag-grid-community";
 import { FiSearch, FiPlus, FiDownload, FiColumns, FiMail, FiPrinter } from "react-icons/fi";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
+import { formatAppDate } from "@/lib/formatDate";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
 
 type InvoiceStatus = "Draft" | "Sent" | "Viewed" | "Partially Paid" | "Paid" | "Overdue" | "Void";
 
@@ -217,6 +219,8 @@ function InvoicesContent() {
       minWidth: 118,
       filter: true,
       sortable: true,
+      cellRenderer: (params: ICellRendererParams<Invoice>) =>
+        params.value ? formatAppDate(params.value as string) : "—",
     },
     {
       field: "dueDate",
@@ -230,9 +234,10 @@ function InvoicesContent() {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const isOverdue = dueDate < today && params.data?.status !== "Paid";
+        const label = params.value ? formatAppDate(params.value as string) : "—";
         return (
           <span style={{ color: isOverdue ? "var(--color-error)" : "inherit" }}>
-            {params.value}
+            {label}
           </span>
         );
       },
@@ -604,20 +609,7 @@ function InvoicesContent() {
           borderRadius: "8px",
         }}
       >
-        <div
-          className="ag-theme-alpine-dark min-w-0"
-          style={{
-            height: "100%",
-            width: "100%",
-            "--ag-background-color": "var(--color-dark-bg-secondary)",
-            "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-            "--ag-odd-row-background-color": "var(--color-dark-bg)",
-            "--ag-row-hover-color": "var(--color-primary-hover)",
-            "--ag-header-foreground-color": "var(--color-text-primary)",
-            "--ag-foreground-color": "var(--color-text-primary)",
-            "--ag-border-color": "var(--color-dark-bg-tertiary)",
-          } as React.CSSProperties}
-        >
+        <AgGridThemeShell>
           <AgGridReact
             rowData={filteredData}
             columnDefs={colDefs}
@@ -633,7 +625,7 @@ function InvoicesContent() {
             suppressCellFocus={true}
             rowStyle={{ cursor: "pointer" }}
           />
-        </div>
+        </AgGridThemeShell>
       </Box>
     </Flex>
   );

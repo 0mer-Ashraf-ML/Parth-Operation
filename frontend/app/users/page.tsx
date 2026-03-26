@@ -1,94 +1,106 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Flex, Text, Heading, Box, TextField, Button, Badge, Dialog, Select, DropdownMenu, Checkbox } from "@radix-ui/themes";
 import { AgGridReact } from "ag-grid-react";
 import { ColDef, ICellRendererParams } from "ag-grid-community";
-import { FiSearch, FiPlus, FiMail, FiUser, FiUserX, FiColumns } from "react-icons/fi";
+import { FiSearch, FiMail, FiColumns } from "react-icons/fi";
 import { useFormik } from "formik";
 import * as yup from "yup";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
+import { TableDataLoader } from "@/components/TableDataLoader";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
+import { toast } from "react-toastify";
+import { fetchVendors } from "@/lib/api/services/vendorsService";
+import { formatAppDate } from "@/lib/formatDate";
+import type { Vendor } from "@/lib/store/vendorsSlice";
+import { useAppDispatch, useAppSelector } from "@/lib/store/hooks";
+import {
+  createUserAsync,
+  deactivateUserAsync,
+  fetchUsersAsync,
+  updateUserAsync,
+  type User as ApiUser,
+  type UserRole as ApiUserRole,
+} from "@/lib/store/usersSlice";
 
 type UserRole = "ADMIN" | "ACCOUNT_MANAGER" | "VENDOR";
 
 interface User {
   id: string;
+  fullName: string;
   email: string;
   role: UserRole;
   status: "Active" | "Inactive";
-  invitedAt: string;
-  lastLogin: string | null;
-  assignedClientsCount: number;
+  createdAt: string;
+  updatedAt: string;
+  vendorId: number | null;
 }
 
-// Mock data - replace with actual API call
-const mockUsers: User[] = [
-  {
-    id: "1",
-    email: "admin@parth.com",
-    role: "ADMIN",
-    status: "Active",
-    invitedAt: "2024-01-01",
-    lastLogin: "2024-02-15",
-    assignedClientsCount: 0,
-  },
-  {
-    id: "2",
-    email: "manager@parth.com",
-    role: "ACCOUNT_MANAGER",
-    status: "Active",
-    invitedAt: "2024-01-05",
-    lastLogin: "2024-02-14",
-    assignedClientsCount: 3,
-  },
-  {
-    id: "3",
-    email: "vendor@techsolutions.com",
-    role: "VENDOR",
-    status: "Active",
-    invitedAt: "2024-01-10",
-    lastLogin: "2024-02-13",
-    assignedClientsCount: 0,
-  },
-  {
-    id: "4",
-    email: "manager2@parth.com",
-    role: "ACCOUNT_MANAGER",
-    status: "Inactive",
-    invitedAt: "2024-01-15",
-    lastLogin: "2024-01-20",
-    assignedClientsCount: 2,
-  },
-];
+const roleToUi = (role: ApiUserRole): UserRole => {
+  if (role === "admin") return "ADMIN";
+  if (role === "account_manager") return "ACCOUNT_MANAGER";
+  return "VENDOR";
+};
+
+const roleToApi = (role: UserRole): ApiUserRole => {
+  if (role === "ADMIN") return "admin";
+  if (role === "ACCOUNT_MANAGER") return "account_manager";
+  return "vendor";
+};
+
+const mapUserFromApi = (user: ApiUser): User => ({
+  id: String(user.id),
+  fullName: user.full_name,
+  email: user.email,
+  role: roleToUi(user.role),
+  status: user.is_active ? "Active" : "Inactive",
+  createdAt: user.created_at,
+  updatedAt: user.updated_at,
+  vendorId: user.vendor_id,
+});
 
 const inviteValidationSchema = yup.object({
+  full_name: yup.string().trim().required("Full name is required"),
   email: yup
     .string()
     .email("Invalid email address")
     .required("Email is required"),
+  password: yup.string().min(8, "Password must be at least 8 characters").required("Password is required"),
   role: yup
     .string()
     .oneOf(["ADMIN", "ACCOUNT_MANAGER", "VENDOR"], "Please select a role")
     .required("Role is required"),
+  vendor_id: yup
+    .number()
+    .nullable()
+    .when("role", {
+      is: "VENDOR",
+      then: (schema) => schema.required("Vendor is required for vendor users"),
+      otherwise: (schema) => schema.nullable(),
+    }),
 });
 
 // Column visibility storage key
 const COLUMN_VISIBILITY_STORAGE_KEY = "users-table-column-visibility";
 
-const NARROW_AUTO_HIDE_FIELDS = new Set(["assignedClientsCount", "lastLogin"]);
+const NARROW_AUTO_HIDE_FIELDS = new Set(["createdAt"]);
 
 function UsersContent() {
   const router = useRouter();
-  const [rowData, setRowData] = useState<User[]>(mockUsers);
+  const dispatch = useAppDispatch();
+  const { users, isLoading, lastFetched } = useAppSelector((state) => state.users);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [searchText, setSearchText] = useState("");
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [isInviting, setIsInviting] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [userToDeactivate, setUserToDeactivate] = useState<string | null>(null);
   const isNarrowScreen = useNarrowScreen();
+  const hasFetchedRef = useRef(false);
 
   // Column visibility state - track which columns are visible
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => {
@@ -106,49 +118,79 @@ function UsersContent() {
     return {};
   });
 
-  const inviteFormik = useFormik<{ email: string; role: UserRole | "" }>({
+  useEffect(() => {
+    const hasData = users.length > 0 || lastFetched !== null;
+    if (!hasFetchedRef.current && !hasData && !isLoading) {
+      hasFetchedRef.current = true;
+      dispatch(fetchUsersAsync());
+    } else if (hasData) {
+      hasFetchedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const loadVendors = async () => {
+      try {
+        const data = await fetchVendors();
+        setVendors(data.filter((v) => v.is_active));
+      } catch {
+        // Keep user flow usable even if vendors endpoint fails.
+      }
+    };
+    loadVendors();
+  }, []);
+
+  const inviteFormik = useFormik<{
+    full_name: string;
+    email: string;
+    password: string;
+    role: UserRole | "";
+    vendor_id: number | null;
+  }>({
     initialValues: {
+      full_name: "",
       email: "",
+      password: "",
       role: "",
+      vendor_id: null,
     },
     validationSchema: inviteValidationSchema,
     onSubmit: async (values) => {
       setIsInviting(true);
-      // Simulate API call - replace with actual API
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      
-      // Add new user to list
-      const newUser: User = {
-        id: Date.now().toString(),
-        email: values.email,
-        role: values.role as UserRole,
-        status: "Active",
-        invitedAt: new Date().toISOString().split("T")[0],
-        lastLogin: null,
-        assignedClientsCount: 0,
-      };
-      
-      setRowData([...rowData, newUser]);
-      inviteFormik.resetForm();
-      setInviteDialogOpen(false);
-      setIsInviting(false);
-      
-      // In a real app, you would send an invitation email here
-      alert(`Invitation sent to ${values.email}`);
+      try {
+        await dispatch(
+          createUserAsync({
+          email: values.email.trim(),
+          password: values.password,
+          full_name: values.full_name.trim(),
+          role: roleToApi(values.role as UserRole),
+          vendor_id: values.role === "VENDOR" ? values.vendor_id : null,
+          })
+        ).unwrap();
+        inviteFormik.resetForm();
+        setInviteDialogOpen(false);
+      } catch (error: any) {
+        toast.error(error.message || "Failed to create user");
+      } finally {
+        setIsInviting(false);
+      }
     },
   });
 
   const filteredData = useMemo(() => {
+    const rowData = users.map(mapUserFromApi);
     if (!searchText) return rowData;
     
     const searchLower = searchText.toLowerCase();
     return rowData.filter(
       (user) =>
+        user.fullName.toLowerCase().includes(searchLower) ||
         user.email.toLowerCase().includes(searchLower) ||
         user.role.toLowerCase().includes(searchLower) ||
         user.status.toLowerCase().includes(searchLower)
     );
-  }, [rowData, searchText]);
+  }, [users, searchText]);
 
   const getRoleColor = (role: UserRole) => {
     switch (role) {
@@ -170,32 +212,37 @@ function UsersContent() {
 
   const confirmDeactivate = () => {
     if (!userToDeactivate) return;
-    
-    setRowData(
-      rowData.map((user) =>
-        user.id === userToDeactivate ? { ...user, status: "Inactive" as const } : user
-      )
-    );
-    setDeactivateDialogOpen(false);
-    setUserToDeactivate(null);
-    
-    // In a real app, you would call an API here
-    alert("User deactivated successfully");
+
+    (async () => {
+      try {
+        await dispatch(deactivateUserAsync(userToDeactivate)).unwrap();
+      } catch (error: any) {
+        toast.error(error.message || "Failed to deactivate user");
+      } finally {
+        setDeactivateDialogOpen(false);
+        setUserToDeactivate(null);
+      }
+    })();
   };
 
   const handleActivate = async (userId: string) => {
-    setRowData(
-      rowData.map((user) =>
-        user.id === userId ? { ...user, status: "Active" as const } : user
-      )
-    );
-    
-    // In a real app, you would call an API here
-    alert("User activated successfully");
+    try {
+      await dispatch(updateUserAsync({ userId, payload: { is_active: true } })).unwrap();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to activate user");
+    }
   };
 
   // Base column definitions - memoized to avoid recreation on every render
   const baseColDefs = useMemo<ColDef<User>[]>(() => [
+    {
+      field: "fullName",
+      headerName: "Name",
+      flex: 1,
+      minWidth: 140,
+      filter: true,
+      sortable: true,
+    },
     {
       field: "email",
       headerName: "Email",
@@ -203,7 +250,7 @@ function UsersContent() {
       minWidth: 120,
       filter: true,
       sortable: true,
-      lockVisible: true, // Always show Email (primary identifier)
+      lockVisible: true,
     },
     {
       field: "role",
@@ -236,30 +283,14 @@ function UsersContent() {
       },
     },
     {
-      field: "assignedClientsCount",
-      headerName: "Assigned Clients",
-      width: 150,
-      flex: 1,
-      filter: true,
-      sortable: true,
-      cellRenderer: (params: ICellRendererParams<User>) => {
-        if (params.data?.role !== "ACCOUNT_MANAGER") {
-          return <Text style={{ color: "var(--color-text-secondary)" }}>—</Text>;
-        }
-        return params.value || 0;
-      },
-    },
-    {
-      field: "lastLogin",
-      headerName: "Last Login",
+      field: "createdAt",
+      headerName: "Created At",
       width: 130,
       flex: 1,
       filter: true,
       sortable: true,
       cellRenderer: (params: ICellRendererParams<User>) => {
-        return params.value
-          ? new Date(params.value).toLocaleDateString()
-          : <Text style={{ color: "var(--color-text-secondary)" }}>Never</Text>;
+        return params.value ? formatAppDate(params.value as string) : "—";
       },
     },
   ], []);
@@ -348,17 +379,53 @@ function UsersContent() {
               }}
             >
               <FiMail size={18} style={{ marginRight: "8px" }} />
-              Invite User
+              Create User
             </Button>
           </Dialog.Trigger>
           <Dialog.Content style={{ maxWidth: "500px" }}>
-            <Dialog.Title>Invite New User</Dialog.Title>
+            <Dialog.Title>Create New User</Dialog.Title>
             <Dialog.Description size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
-              Send an invitation email to a new user. They will receive instructions to set up their account.
+              Create a new user account with role-specific access.
             </Dialog.Description>
 
             <form onSubmit={inviteFormik.handleSubmit}>
               <Flex direction="column" gap="4">
+                <Box>
+                  <Text
+                    size="2"
+                    weight="medium"
+                    mb="2"
+                    as="label"
+                    htmlFor="invite-full-name"
+                    className="block"
+                    style={{ color: "var(--color-text-primary)" }}
+                  >
+                    Full Name *
+                  </Text>
+                  <TextField.Root
+                    id="invite-full-name"
+                    name="full_name"
+                    placeholder="User full name"
+                    value={inviteFormik.values.full_name}
+                    onChange={inviteFormik.handleChange}
+                    onBlur={inviteFormik.handleBlur}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border:
+                        inviteFormik.touched.full_name && inviteFormik.errors.full_name
+                          ? "1px solid var(--color-error)"
+                          : "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                  {inviteFormik.touched.full_name && inviteFormik.errors.full_name && (
+                    <Text size="1" color="red" mt="1" className="block">
+                      {inviteFormik.errors.full_name}
+                    </Text>
+                  )}
+                </Box>
+
                 <Box>
                   <Text
                     size="2"
@@ -392,6 +459,43 @@ function UsersContent() {
                   {inviteFormik.touched.email && inviteFormik.errors.email && (
                     <Text size="1" color="red" mt="1" className="block">
                       {inviteFormik.errors.email}
+                    </Text>
+                  )}
+                </Box>
+
+                <Box>
+                  <Text
+                    size="2"
+                    weight="medium"
+                    mb="2"
+                    as="label"
+                    htmlFor="invite-password"
+                    className="block"
+                    style={{ color: "var(--color-text-primary)" }}
+                  >
+                    Password *
+                  </Text>
+                  <TextField.Root
+                    id="invite-password"
+                    name="password"
+                    type="password"
+                    placeholder="At least 8 characters"
+                    value={inviteFormik.values.password}
+                    onChange={inviteFormik.handleChange}
+                    onBlur={inviteFormik.handleBlur}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border:
+                        inviteFormik.touched.password && inviteFormik.errors.password
+                          ? "1px solid var(--color-error)"
+                          : "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                  {inviteFormik.touched.password && inviteFormik.errors.password && (
+                    <Text size="1" color="red" mt="1" className="block">
+                      {inviteFormik.errors.password}
                     </Text>
                   )}
                 </Box>
@@ -437,6 +541,54 @@ function UsersContent() {
                   )}
                 </Box>
 
+                {inviteFormik.values.role === "VENDOR" && (
+                  <Box>
+                    <Text
+                      size="2"
+                      weight="medium"
+                      mb="2"
+                      as="label"
+                      htmlFor="invite-vendor"
+                      className="block"
+                      style={{ color: "var(--color-text-primary)" }}
+                    >
+                      Vendor *
+                    </Text>
+                    <Select.Root
+                      value={inviteFormik.values.vendor_id ? String(inviteFormik.values.vendor_id) : ""}
+                      onValueChange={(value) =>
+                        inviteFormik.setFieldValue("vendor_id", value ? Number(value) : null)
+                      }
+                    >
+                      <Select.Trigger
+                        id="invite-vendor"
+                        placeholder="Select vendor"
+                        style={{
+                          background: "var(--color-dark-bg-secondary)",
+                          border:
+                            inviteFormik.touched.vendor_id && inviteFormik.errors.vendor_id
+                              ? "1px solid var(--color-error)"
+                              : "1px solid var(--color-dark-bg-tertiary)",
+                          color: "var(--color-text-primary)",
+                          width: "100%",
+                        }}
+                      />
+                      <Select.Content>
+                        {vendors.map((vendor) => (
+                          <Select.Item key={vendor.id} value={String(vendor.id)}>
+                            {vendor.company_name}
+                          </Select.Item>
+                        ))}
+                      </Select.Content>
+                    </Select.Root>
+                    {inviteFormik.touched.vendor_id && inviteFormik.errors.vendor_id && (
+                      <Text size="1" color="red" mt="1" className="block">
+                        {String(inviteFormik.errors.vendor_id)}
+                      </Text>
+                    )}
+                  </Box>
+                )}
+
                 <Flex gap="3" justify="end" mt="4">
                   <Dialog.Close>
                     <Button
@@ -456,7 +608,7 @@ function UsersContent() {
                       fontWeight: "600",
                     }}
                   >
-                    {isInviting ? "Sending..." : "Send Invitation"}
+                    {isInviting ? "Creating..." : "Create User"}
                   </Button>
                 </Flex>
               </Flex>
@@ -570,38 +722,30 @@ function UsersContent() {
           minHeight: "500px",
           background: "var(--color-dark-bg-secondary)",
           borderRadius: "8px",
+          position: "relative",
         }}
       >
-        <div
-          className="ag-theme-alpine-dark min-w-0"
-          style={{
-            height: "100%",
-            width: "100%",
-            "--ag-background-color": "var(--color-dark-bg-secondary)",
-            "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-            "--ag-odd-row-background-color": "var(--color-dark-bg)",
-            "--ag-row-hover-color": "var(--color-primary-hover)",
-            "--ag-header-foreground-color": "var(--color-text-primary)",
-            "--ag-foreground-color": "var(--color-text-primary)",
-            "--ag-border-color": "var(--color-dark-bg-tertiary)",
-          } as React.CSSProperties}
-        >
-          <AgGridReact
-            rowData={filteredData}
-            columnDefs={colDefs}
-            defaultColDef={defaultColDef}
-            pagination={true}
-            paginationPageSize={20}
-            paginationPageSizeSelector={[10, 20, 50, 100]}
-            animateRows={true}
-            rowSelection="single"
-            onRowClicked={(params) => {
-              router.push(`/users/${params.data?.id}`);
-            }}
-            suppressCellFocus={true}
-            rowStyle={{ cursor: "pointer" }}
-          />
-        </div>
+        {isLoading ? (
+          <TableDataLoader minHeight={500} />
+        ) : (
+          <AgGridThemeShell>
+            <AgGridReact
+              rowData={filteredData}
+              columnDefs={colDefs}
+              defaultColDef={defaultColDef}
+              pagination={true}
+              paginationPageSize={20}
+              paginationPageSizeSelector={[10, 20, 50, 100]}
+              animateRows={true}
+              rowSelection="single"
+              onRowClicked={(params) => {
+                router.push(`/users/${params.data?.id}`);
+              }}
+              suppressCellFocus={true}
+              rowStyle={{ cursor: "pointer" }}
+            />
+          </AgGridThemeShell>
+        )}
       </Box>
 
       {/* Deactivate Confirmation Dialog */}

@@ -16,6 +16,7 @@ import {
 } from "@radix-ui/themes";
 import { FiSend, FiMenu, FiChevronLeft, FiPlus, FiTrash2 } from "react-icons/fi";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
+import { formatAppDate, formatAppDateTime } from "@/lib/formatDate";
 
 interface Message {
   id: string;
@@ -427,7 +428,7 @@ function AIChatContent() {
                               marginTop: "4px",
                             }}
                           >
-                            {conversation.updatedAt.toLocaleDateString()}
+                            {formatAppDate(conversation.updatedAt)}
                           </Text>
                         </Box>
                         <Button
@@ -555,10 +556,7 @@ function AIChatContent() {
                     display: "block",
                   }}
                 >
-                  {message.timestamp.toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {formatAppDateTime(message.timestamp)}
                 </Text>
               </Card>
               {message.role === "user" && (

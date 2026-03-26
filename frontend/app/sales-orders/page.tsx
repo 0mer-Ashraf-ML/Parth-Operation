@@ -14,8 +14,16 @@ import { toast } from "react-toastify";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
 import { TableDataLoader } from "@/components/TableDataLoader";
-
-type SOStatus = "Pending" | "Partial Delivered" | "Delivered";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
+import { formatAppDate } from "@/lib/formatDate";
+import {
+  formatSoStatus,
+  formatPaymentStatus,
+  soStatusBadgeColor,
+  paymentStatusBadgeColor,
+  type SoUiStatus,
+  type PaymentUiStatus,
+} from "@/lib/salesOrderStatusDisplay";
 
 interface SalesOrder {
   id: number;
@@ -23,26 +31,12 @@ interface SalesOrder {
   clientName: string;
   clientId: number;
   orderDate: string | null;
-  status: SOStatus;
+  status: SoUiStatus;
+  paymentStatus: PaymentUiStatus;
   totalAmount: number;
   lineItemsCount: number;
 }
 
-// Helper function to map API status to frontend status
-const mapStatus = (apiStatus: string): SOStatus => {
-  switch (apiStatus.toLowerCase()) {
-    case "pending":
-      return "Pending";
-    case "partial_delivered":
-      return "Partial Delivered";
-    case "delivered":
-      return "Delivered";
-    default:
-      return "Pending";
-  }
-};
-
-// Helper function to map Redux SalesOrder to frontend structure
 const mapSalesOrderFromRedux = (reduxSO: ReduxSalesOrder): SalesOrder => {
   return {
     id: reduxSO.id,
@@ -50,7 +44,8 @@ const mapSalesOrderFromRedux = (reduxSO: ReduxSalesOrder): SalesOrder => {
     clientName: reduxSO.client_name,
     clientId: reduxSO.client_id,
     orderDate: reduxSO.order_date,
-    status: mapStatus(reduxSO.status),
+    status: formatSoStatus(reduxSO.status),
+    paymentStatus: formatPaymentStatus(reduxSO.payment_status),
     totalAmount: reduxSO.total_amount || 0,
     lineItemsCount: reduxSO.line_count || 0,
   };
@@ -59,7 +54,7 @@ const mapSalesOrderFromRedux = (reduxSO: ReduxSalesOrder): SalesOrder => {
 // Column visibility storage key
 const COLUMN_VISIBILITY_STORAGE_KEY = "sales-orders-table-column-visibility";
 
-const NARROW_AUTO_HIDE_FIELDS = new Set(["orderDate", "lineItemsCount"]);
+const NARROW_AUTO_HIDE_FIELDS = new Set(["orderDate", "lineItemsCount", "paymentStatus"]);
 
 function SalesOrdersContent() {
   const router = useRouter();
@@ -119,22 +114,10 @@ function SalesOrdersContent() {
       (so) =>
         so.soNumber.toLowerCase().includes(searchLower) ||
         so.clientName.toLowerCase().includes(searchLower) ||
-        so.status.toLowerCase().includes(searchLower)
+        so.status.toLowerCase().includes(searchLower) ||
+        so.paymentStatus.toLowerCase().includes(searchLower)
     );
   }, [rowData, searchText]);
-
-  const getStatusColor = (status: SOStatus) => {
-    switch (status) {
-      case "Pending":
-        return "orange";
-      case "Partial Delivered":
-        return "blue";
-      case "Delivered":
-        return "green";
-      default:
-        return "gray";
-    }
-  };
 
   // Base column definitions - memoized to avoid recreation on every render
   const baseColDefs = useMemo<ColDef<SalesOrder>[]>(() => [
@@ -162,20 +145,31 @@ function SalesOrdersContent() {
       minWidth: 118,
       filter: true,
       sortable: true,
+      cellRenderer: (params: ICellRendererParams<SalesOrder>) =>
+        params.value ? formatAppDate(params.value as string, "—") : "—",
     },
     {
       field: "status",
-      headerName: "Status",
+      headerName: "SO status",
       flex: 1,
-      minWidth: 130,
+      minWidth: 140,
       filter: true,
       sortable: true,
       cellRenderer: (params: ICellRendererParams<SalesOrder>) => {
-        return (
-          <Badge color={getStatusColor(params.value as SOStatus)}>
-            {params.value}
-          </Badge>
-        );
+        const st = params.value as SoUiStatus;
+        return <Badge color={soStatusBadgeColor(st)}>{st}</Badge>;
+      },
+    },
+    {
+      field: "paymentStatus",
+      headerName: "Payment",
+      flex: 1,
+      minWidth: 140,
+      filter: true,
+      sortable: true,
+      cellRenderer: (params: ICellRendererParams<SalesOrder>) => {
+        const ps = params.value as PaymentUiStatus;
+        return <Badge color={paymentStatusBadgeColor(ps)}>{ps}</Badge>;
       },
     },
     {
@@ -480,20 +474,7 @@ function SalesOrdersContent() {
         {isLoading ? (
           <TableDataLoader minHeight={500} />
         ) : (
-          <div
-            className="ag-theme-alpine-dark min-w-0"
-            style={{
-              height: "100%",
-              width: "100%",
-              "--ag-background-color": "var(--color-dark-bg-secondary)",
-              "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-              "--ag-odd-row-background-color": "var(--color-dark-bg)",
-              "--ag-row-hover-color": "var(--color-primary-hover)",
-              "--ag-header-foreground-color": "var(--color-text-primary)",
-              "--ag-foreground-color": "var(--color-text-primary)",
-              "--ag-border-color": "var(--color-dark-bg-tertiary)",
-            } as React.CSSProperties}
-          >
+          <AgGridThemeShell>
             <AgGridReact
               rowData={filteredData}
               columnDefs={colDefs}
@@ -509,7 +490,7 @@ function SalesOrdersContent() {
               suppressCellFocus={true}
               rowStyle={{ cursor: "pointer" }}
             />
-          </div>
+          </AgGridThemeShell>
         )}
       </Box>
 

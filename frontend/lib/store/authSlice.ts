@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import { login, refreshToken, getMe, LoginRequest, LoginResponse, MeResponse, removeAccessToken } from "../api/auth";
+import { resetRoleScopedCache } from "./resetRoleScopedCache";
 
 export interface User {
   id: number;
@@ -31,10 +32,11 @@ const initialState: AuthState = {
 // Async thunk for login
 export const loginAsync = createAsyncThunk(
   "auth/login",
-  async (credentials: LoginRequest, { rejectWithValue }) => {
+  async (credentials: LoginRequest, { rejectWithValue, dispatch }) => {
     try {
       const response: LoginResponse = await login(credentials);
-      // Only save token and expiry on login
+      // Drop previous user's cached lists so vendor/AM never see admin-sized data
+      resetRoleScopedCache(dispatch);
       return {
         accessToken: response.data.access_token,
         expiresInMinutes: response.data.expires_in_minutes,
@@ -86,6 +88,7 @@ export const getMeAsync = createAsyncThunk(
 export const logoutAsync = createAsyncThunk(
   "auth/logout",
   async (_, { dispatch }) => {
+    resetRoleScopedCache(dispatch);
     removeAccessToken();
     // Clear persisted state from localStorage
     if (typeof window !== "undefined") {

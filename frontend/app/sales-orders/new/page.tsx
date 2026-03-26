@@ -22,6 +22,7 @@ import { FiArrowLeft, FiSave, FiTrash2, FiPlus } from "react-icons/fi";
 import { createSalesOrder, type CreateSalesOrderRequest } from "@/lib/api/services/salesOrdersService";
 import { fetchClients } from "@/lib/api/services/clientsService";
 import { fetchClientById } from "@/lib/api/services/clientsService";
+import { isClientShipToAddress } from "@/lib/store/clientsSlice";
 import { fetchSKUs } from "@/lib/api/services/skusService";
 import { toast } from "react-toastify";
 
@@ -117,13 +118,12 @@ function CreateSOContent() {
           client_id: parseInt(values.clientId),
           ship_to_address_id: values.shipToAddressId ? parseInt(values.shipToAddressId) : null,
           order_date: null, // Can be added to form if needed
-          due_date: null, // Can be added to form if needed
           notes: values.notes || null,
           lines: values.lineItems.map((item, index) => ({
             sku_id: parseInt(item.skuId),
             line_number: index + 1,
             ordered_qty: item.quantity,
-            unit_price: item.unitPrice || 0,
+            ...(item.unitPrice && item.unitPrice > 0 ? { unit_price: item.unitPrice } : {}),
             due_date: item.dueDate || null,
           })),
         };
@@ -193,8 +193,8 @@ function CreateSOContent() {
       if (selectedClientId) {
         try {
           const client = await fetchClientById(selectedClientId);
-          // Map addresses from client data
-          const addresses: ShipToAddress[] = (client.addresses || []).map((addr: any) => ({
+          const shipToOnly = (client.addresses || []).filter((addr: any) => isClientShipToAddress(addr));
+          const addresses: ShipToAddress[] = shipToOnly.map((addr: any) => ({
             id: addr.id.toString(),
             addressLine1: addr.address_line_1 || "",
             addressLine2: addr.address_line_2 || "",

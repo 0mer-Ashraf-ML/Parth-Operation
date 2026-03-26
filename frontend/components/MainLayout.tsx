@@ -2,7 +2,7 @@
 
 import { Flex, Box, Text, Button, Avatar, Badge, IconButton, TextField, Tooltip, Dialog, Popover, Separator } from "@radix-ui/themes";
 import { useRouter, usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { 
   FiLayout, 
   FiUsers, 
@@ -53,6 +53,41 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [logoutHovered, setLogoutHovered] = useState(false);
   const [hideSidebarHovered, setHideSidebarHovered] = useState(false);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [isLgUp, setIsLgUp] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(min-width: 1024px)").matches;
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const apply = () => setIsLgUp(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  useEffect(() => {
+    if (isLgUp) setMobileDrawerOpen(false);
+  }, [isLgUp]);
+
+  useEffect(() => {
+    setMobileDrawerOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileDrawerOpen || isLgUp) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileDrawerOpen, isLgUp]);
 
   // Mock notification data - replace with actual API call
   const notifications = [
@@ -121,10 +156,10 @@ export default function MainLayout({ children }: MainLayoutProps) {
     { icon: FiPackage, label: "SKUs", path: "/skus", roles: ["ADMIN"] as UserRole[] },
     { icon: FiFileText, label: "Sales Orders", path: "/sales-orders", roles: ["ADMIN", "ACCOUNT_MANAGER"] as UserRole[] },
     { icon: FiShoppingCart, label: "Purchase Orders", path: "/purchase-orders", roles: ["ADMIN", "ACCOUNT_MANAGER", "VENDOR"] as UserRole[] },
-    { icon: FiDollarSign, label: "Invoices", path: "/invoices", roles: ["ADMIN", "ACCOUNT_MANAGER"] as UserRole[] },
-    { icon: FiBarChart, label: "Reports", path: "/reports", roles: ["ADMIN", "ACCOUNT_MANAGER"] as UserRole[] },
-    { icon: FiUser, label: "Users", path: "/users", roles: ["ADMIN"] as UserRole[] },
+    // { icon: FiDollarSign, label: "Invoices", path: "/invoices", roles: ["ADMIN", "ACCOUNT_MANAGER"] as UserRole[] },
+    // { icon: FiBarChart, label: "Reports", path: "/reports", roles: ["ADMIN", "ACCOUNT_MANAGER"] as UserRole[] },
     { icon: FiMessageCircle, label: "AI Chat", path: "/ai-chat", roles: ["ADMIN", "ACCOUNT_MANAGER", "VENDOR"] as UserRole[] },
+    { icon: FiUser, label: "Users", path: "/users", roles: ["ADMIN"] as UserRole[] },
   ];
 
   // Normalize role for comparison (API returns lowercase, menu uses uppercase)
@@ -136,16 +171,38 @@ export default function MainLayout({ children }: MainLayoutProps) {
 
   const isActive = (path: string) => pathname === path;
 
+  const navigateTo = useCallback(
+    (path: string) => {
+      router.push(path);
+      if (!isLgUp) setMobileDrawerOpen(false);
+    },
+    [router, isLgUp]
+  );
+
+  const showSidebarChrome = menuItems.length > 0 && (!isLgUp || sidebarVisible);
+  /** Mobile overlay drawer always uses expanded labels; desktop uses collapsed rail when sidebarOpen is false */
+  const railExpanded = isLgUp ? sidebarOpen : true;
+
   return (
-    <Flex className="min-h-screen" style={{ background: "var(--gray-1)" }}>
-      {sidebarVisible && (
+    <Flex className="relative min-h-screen min-w-0" style={{ background: "var(--gray-1)" }}>
+      {!isLgUp && mobileDrawerOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-90 bg-black/60 lg:hidden"
+          onClick={() => setMobileDrawerOpen(false)}
+        />
+      )}
+      {showSidebarChrome && (
         <Box
-          className="hidden md:flex flex-col"
+          className={`flex flex-col max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-100 max-lg:h-screen max-lg:shadow-xl lg:shrink-0 ${
+            !isLgUp && !mobileDrawerOpen ? "max-lg:pointer-events-none max-lg:-translate-x-full" : ""
+          } ${!isLgUp && mobileDrawerOpen ? "max-lg:pointer-events-auto max-lg:translate-x-0" : ""} max-lg:transition-transform max-lg:duration-300 max-lg:ease-out`}
           style={{
-            width: sidebarOpen ? "256px" : "80px",
+            width: isLgUp ? (sidebarOpen ? "256px" : "80px") : "min(280px, 85vw)",
             background: "var(--color-dark-bg)",
             borderRight: "1px solid var(--color-dark-bg-secondary)",
-            transition: "width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+            transition: isLgUp ? "width 0.3s cubic-bezier(0.4, 0, 0.2, 1)" : undefined,
             overflow: "hidden",
           }}
         >
@@ -156,10 +213,12 @@ export default function MainLayout({ children }: MainLayoutProps) {
             transition: "all 0.3s ease",
           }}
         >
-          <Flex align="center" gap="3" justify={sidebarOpen ? "start" : "center"}>
+          <Flex align="center" gap="3" justify={railExpanded ? "start" : "center"}>
             <Box
               className="w-9 h-9 rounded-lg cursor-pointer transition-transform duration-200 hover:scale-105"
-              onClick={handleSidebarToggle}
+              onClick={() => {
+                if (isLgUp) handleSidebarToggle();
+              }}
               style={{
                 background: "var(--color-dark-bg-tertiary)",
                 border: "2px solid var(--color-primary)",
@@ -171,14 +230,14 @@ export default function MainLayout({ children }: MainLayoutProps) {
             >
                               <Image src="/slogo.png" alt="PARTH Logo" width={40} height={40} />
             </Box>
-            {sidebarOpen && (
+            {railExpanded && (
               <Text 
                 size="5" 
                 weight="bold" 
                 style={{ 
                   color: "var(--color-text-primary)",
                   whiteSpace: "nowrap",
-                  opacity: sidebarOpen ? 1 : 0,
+                  opacity: railExpanded ? 1 : 0,
                   transition: "opacity 0.2s ease",
                 
                 }}
@@ -207,32 +266,32 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   fontWeight: active ? "600" : "400",
                   borderRadius: "8px",
                   display: "flex",
-                  justifyContent: sidebarOpen ? "flex-start" : "center",
+                  justifyContent: railExpanded ? "flex-start" : "center",
                   alignItems: "center",
                   textAlign: "left",
                   cursor: "pointer",
                 }}
                 onMouseEnter={() => setHoveredItem(item.path)}
                 onMouseLeave={() => setHoveredItem(null)}
-                onClick={() => router.push(item.path)}
+                onClick={() => navigateTo(item.path)}
               >
                 <Icon 
                   size={20} 
                   style={{ 
-                    marginRight: sidebarOpen ? "0.875rem" : "0",
+                    marginRight: railExpanded ? "0.875rem" : "0",
                     color: active ? "var(--color-text-dark)" : isHovered ? "var(--color-primary)" : "var(--color-text-primary)",
                     flexShrink: 0,
                     transition: "color 0.2s ease",
                   }} 
                 />
-                {sidebarOpen && (
+                {railExpanded && (
                   <Text 
                     size="2" 
                     weight={active ? "bold" : "regular"} 
                     style={{ 
                       textAlign: "left",
                       whiteSpace: "nowrap",
-                      opacity: sidebarOpen ? 1 : 0,
+                      opacity: railExpanded ? 1 : 0,
                       transition: "opacity 0.2s ease, color 0.2s ease",
                       color: active ? "var(--color-text-dark)" : isHovered ? "var(--color-primary)" : "var(--color-text-primary)",
                     }}
@@ -243,8 +302,8 @@ export default function MainLayout({ children }: MainLayoutProps) {
               </Button>
             );
 
-            // Show tooltip only when sidebar is collapsed
-            if (!sidebarOpen) {
+            // Show tooltip only when desktop rail is collapsed
+            if (!railExpanded) {
               return (
                 <Tooltip key={item.path} content={item.label} side="left">
                   {menuButton}
@@ -277,7 +336,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   background: logoutHovered ? "var(--color-error-light)" : "transparent",
                   borderRadius: "8px",
                   display: "flex",
-                  justifyContent: sidebarOpen ? "flex-start" : "center",
+                  justifyContent: railExpanded ? "flex-start" : "center",
                   alignItems: "center",
                   textAlign: "left",
                   cursor: "pointer",
@@ -290,13 +349,13 @@ export default function MainLayout({ children }: MainLayoutProps) {
                 <FiLogOut 
                   size={20} 
                   style={{ 
-                    marginRight: sidebarOpen ? "0.875rem" : "0",
+                    marginRight: railExpanded ? "0.875rem" : "0",
                     flexShrink: 0, 
                     color: logoutHovered ? "var(--color-error-hover)" : "var(--color-error)",
                     transition: "color 0.2s ease",
                   }} 
                 />
-                {sidebarOpen && (
+                {railExpanded && (
                   <Text 
                     size="2" 
                     weight="medium" 
@@ -304,7 +363,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
                       whiteSpace: "nowrap", 
                       color: logoutHovered ? "var(--color-error-hover)" : "var(--color-error)",
                       transition: "color 0.2s ease, opacity 0.2s ease",
-                      opacity: sidebarOpen ? 1 : 0,
+                      opacity: railExpanded ? 1 : 0,
                     }}
                   >
                     Logout
@@ -313,7 +372,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
               </Button>
             );
 
-            if (!sidebarOpen) {
+            if (!railExpanded) {
               return (
                 <Tooltip content="Logout" side="left">
                   {logoutButton}
@@ -345,7 +404,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   background: hideSidebarHovered ? "var(--color-primary-hover)" : "transparent",
                   borderRadius: "8px",
                   display: "flex",
-                  justifyContent: sidebarOpen ? "flex-start" : "center",
+                  justifyContent: railExpanded ? "flex-start" : "center",
                   alignItems: "center",
                   textAlign: "left",
                   cursor: "pointer",
@@ -353,18 +412,21 @@ export default function MainLayout({ children }: MainLayoutProps) {
                 }}
                 onMouseEnter={() => setHideSidebarHovered(true)}
                 onMouseLeave={() => setHideSidebarHovered(false)}
-                onClick={handleSidebarHide}
+                onClick={() => {
+                  if (!isLgUp) setMobileDrawerOpen(false);
+                  else handleSidebarHide();
+                }}
               >
                 <FiChevronLeft 
                   size={20} 
                   style={{ 
-                    marginRight: sidebarOpen ? "0.875rem" : "0",
+                    marginRight: railExpanded ? "0.875rem" : "0",
                     flexShrink: 0, 
                     color: hideSidebarHovered ? "var(--color-primary)" : "var(--color-text-secondary)",
                     transition: "color 0.2s ease",
                   }} 
                 />
-                {sidebarOpen && (
+                {railExpanded && (
                   <Text 
                     size="2" 
                     weight="medium" 
@@ -372,16 +434,16 @@ export default function MainLayout({ children }: MainLayoutProps) {
                       whiteSpace: "nowrap", 
                       color: hideSidebarHovered ? "var(--color-primary)" : "var(--color-text-secondary)",
                       transition: "color 0.2s ease, opacity 0.2s ease",
-                      opacity: sidebarOpen ? 1 : 0,
+                      opacity: railExpanded ? 1 : 0,
                     }}
                   >
-                    Hide Sidebar
+                    {!isLgUp ? "Close menu" : "Hide Sidebar"}
                   </Text>
                 )}
               </Button>
             );
 
-            if (!sidebarOpen) {
+            if (!railExpanded) {
               return (
                 <Tooltip content="Hide Sidebar" side="left">
                   {hideSidebarButton}
@@ -405,30 +467,36 @@ export default function MainLayout({ children }: MainLayoutProps) {
           }}
         >
           <Flex align="center" justify="between" className="h-full">
-            <Flex align="center" gap="4" className="flex-1">
-              {!sidebarVisible && (
-                <IconButton
-                  variant="ghost"
-                  size="2"
-                  onClick={handleSidebarHide}
-                  className="md:flex"
-                  style={{ color: "var(--gray-11)" }}
-                >
-                  <FiMenu size={20} />
-                </IconButton>
+            <Flex align="center" gap="4" className="flex-1 min-w-0">
+              {menuItems.length > 0 && (
+                <>
+                  {!isLgUp && (
+                    <IconButton
+                      variant="ghost"
+                      size="2"
+                      onClick={() => setMobileDrawerOpen((open) => !open)}
+                      aria-expanded={mobileDrawerOpen}
+                      aria-label={mobileDrawerOpen ? "Close menu" : "Open menu"}
+                      className="lg:hidden shrink-0"
+                      style={{ color: "var(--gray-11)" }}
+                    >
+                      <FiMenu size={20} />
+                    </IconButton>
+                  )}
+                  {isLgUp && !sidebarVisible && (
+                    <IconButton
+                      variant="ghost"
+                      size="2"
+                      onClick={handleSidebarHide}
+                      aria-label="Show sidebar"
+                      className="shrink-0"
+                      style={{ color: "var(--gray-11)" }}
+                    >
+                      <FiMenu size={20} />
+                    </IconButton>
+                  )}
+                </>
               )}
-              {sidebarVisible && (
-                <IconButton
-                  variant="ghost"
-                  size="2"
-                  onClick={handleSidebarToggle}
-                  className="md:flex lg:hidden"
-                  style={{ color: "var(--gray-11)" }}
-                >
-                  <FiMenu size={20} />
-                </IconButton>
-              )}
-           
             </Flex>
             <Flex align="center" gap="4">
               {/* Notifications hidden until responsive UX is ready */}

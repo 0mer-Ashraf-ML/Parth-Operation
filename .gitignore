@@ -30,9 +30,9 @@ test_sql.py
 
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
-/node_modules
-/.pnp
+# dependencies (no leading / — match in subfolders e.g. frontend/)
+node_modules/
+.pnp
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -40,15 +40,19 @@ test_sql.py
 !.yarn/releases
 !.yarn/versions
 
+# Yarn Berry in subfolders (e.g. frontend/) — .yarn/* above only matches repo-root .yarn/
+**/.yarn/cache/
+**/.yarn/install-state.gz
+
 # testing
-/coverage
+coverage/
 
 # next.js
-/.next/
-/out/
+.next/
+out/
 
 # production
-/build
+build/
 
 # misc
 .DS_Store

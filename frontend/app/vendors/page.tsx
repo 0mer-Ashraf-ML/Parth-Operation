@@ -14,6 +14,8 @@ import { toast } from "react-toastify";
 import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { getAgGridColumnHide } from "@/lib/agGridResponsive";
 import { TableDataLoader } from "@/components/TableDataLoader";
+import { AgGridThemeShell } from "@/components/AgGridThemeShell";
+import { formatAppDateTime } from "@/lib/formatDate";
 
 // Column visibility storage key
 const COLUMN_VISIBILITY_STORAGE_KEY = "vendors-table-column-visibility";
@@ -47,17 +49,15 @@ function VendorsContent() {
     return {};
   });
 
-  // Fetch vendors from API only if not already loaded
+  // Fetch full vendor list when this page mounts. Do not use vendors.length — a single
+  // vendor may exist in Redux from fetchVendorById (detail page) and must not skip list fetch.
   useEffect(() => {
-    // Check if we already have vendors data
-    const hasData = vendors.length > 0 || lastFetched !== null;
-    
-    // Only fetch if we haven't fetched before and don't have data
-    if (!hasFetchedRef.current && !hasData && !isLoading) {
+    const listAlreadyLoaded = lastFetched !== null;
+
+    if (!hasFetchedRef.current && !listAlreadyLoaded && !isLoading) {
       hasFetchedRef.current = true;
       dispatch(fetchVendorsAsync());
-    } else if (hasData) {
-      // Mark as fetched if we already have data
+    } else if (listAlreadyLoaded) {
       hasFetchedRef.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,13 +67,18 @@ function VendorsContent() {
     if (!searchText) return vendors;
     
     const searchLower = searchText.toLowerCase();
-    return vendors.filter(
-      (vendor) =>
-        vendor.company_name.toLowerCase().includes(searchLower) ||
-        vendor.contact_name.toLowerCase().includes(searchLower) ||
-        vendor.email.toLowerCase().includes(searchLower) ||
-        (vendor.phone && vendor.phone.toLowerCase().includes(searchLower))
-    );
+    return vendors.filter((vendor) => {
+      const name = vendor.company_name ?? "";
+      const contact = vendor.contact_name ?? "";
+      const email = vendor.email ?? "";
+      const phone = vendor.phone ?? "";
+      return (
+        name.toLowerCase().includes(searchLower) ||
+        contact.toLowerCase().includes(searchLower) ||
+        email.toLowerCase().includes(searchLower) ||
+        phone.toLowerCase().includes(searchLower)
+      );
+    });
   }, [vendors, searchText]);
 
   const onSelectionChanged = () => {
@@ -190,8 +195,7 @@ function VendorsContent() {
       sortable: true,
       cellRenderer: (params: ICellRendererParams<Vendor>) => {
         if (!params.value) return "";
-        const date = new Date(params.value);
-        return date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return formatAppDateTime(params.value as string, "");
       },
     },
   ], []);
@@ -443,38 +447,26 @@ function VendorsContent() {
         {isLoading ? (
           <TableDataLoader minHeight={500} />
         ) : (
-          <div
-            className="ag-theme-alpine-dark min-w-0"
-            style={{
-              height: "100%",
-              width: "100%",
-              "--ag-background-color": "var(--color-dark-bg-secondary)",
-              "--ag-header-background-color": "var(--color-dark-bg-tertiary)",
-              "--ag-odd-row-background-color": "var(--color-dark-bg)",
-              "--ag-row-hover-color": "var(--color-primary-hover)",
-              "--ag-header-foreground-color": "var(--color-text-primary)",
-              "--ag-foreground-color": "var(--color-text-primary)",
-              "--ag-border-color": "var(--color-dark-bg-tertiary)",
-            } as React.CSSProperties}
-          >
+          <AgGridThemeShell>
             <AgGridReact
               ref={gridRef}
               rowData={filteredData}
+              getRowId={(params) => String(params.data?.id ?? "")}
               columnDefs={colDefs}
               defaultColDef={defaultColDef}
               pagination={true}
               paginationPageSize={20}
               paginationPageSizeSelector={[10, 20, 50, 100]}
-              animateRows={true}
+              animateRows={false}
               rowSelection="multiple"
-              onSelectionChanged={onSelectionChanged}
+              // onSelectionChanged={onSelectionChanged}
               onRowClicked={(params) => {
                 router.push(`/vendors/${params.data?.id}`);
               }}
               suppressCellFocus={true}
               rowStyle={{ cursor: "pointer" }}
             />
-          </div>
+          </AgGridThemeShell>
         )}
       </Box>
 

@@ -30,78 +30,36 @@ import {
   FiUserX,
   FiUserCheck
 } from "react-icons/fi";
+import { toast } from "react-toastify";
+import { fetchVendors } from "@/lib/api/services/vendorsService";
+import { formatAppDate } from "@/lib/formatDate";
+import type { Vendor } from "@/lib/store/vendorsSlice";
+import { useAppDispatch, useAppSelector } from "@/lib/store/hooks";
+import {
+  deactivateUserAsync,
+  fetchUserByIdAsync,
+  updateUserAsync,
+  updateUserRoleAsync,
+  type User as ApiUser,
+  type UserRole as ApiUserRole,
+} from "@/lib/store/usersSlice";
 
 type UserRole = "ADMIN" | "ACCOUNT_MANAGER" | "VENDOR";
 
 interface UserDetail {
   id: string;
+  full_name: string;
   email: string;
   role: UserRole;
   status: "Active" | "Inactive";
-  invitedAt: string;
-  lastLogin: string | null;
-  assignedClientIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  vendor_id: number | null;
+  password: string;
 }
-
-interface Client {
-  id: string;
-  name: string;
-}
-
-// Mock clients - replace with actual API call
-const mockClients: Client[] = [
-  { id: "1", name: "Acme Corporation" },
-  { id: "2", name: "Tech Solutions Inc" },
-  { id: "3", name: "Global Industries" },
-  { id: "4", name: "Metro Distributors" },
-];
-
-// Mock function to fetch user data - replace with actual API call
-const fetchUserData = async (id: string): Promise<UserDetail | null> => {
-  // Mock data - replace with actual API call
-  const mockUsers: Record<string, UserDetail> = {
-    "1": {
-      id: "1",
-      email: "admin@parth.com",
-      role: "ADMIN",
-      status: "Active",
-      invitedAt: "2024-01-01",
-      lastLogin: "2024-02-15",
-      assignedClientIds: [],
-    },
-    "2": {
-      id: "2",
-      email: "manager@parth.com",
-      role: "ACCOUNT_MANAGER",
-      status: "Active",
-      invitedAt: "2024-01-05",
-      lastLogin: "2024-02-14",
-      assignedClientIds: ["1", "2", "3"],
-    },
-    "3": {
-      id: "3",
-      email: "vendor@techsolutions.com",
-      role: "VENDOR",
-      status: "Active",
-      invitedAt: "2024-01-10",
-      lastLogin: "2024-02-13",
-      assignedClientIds: [],
-    },
-    "4": {
-      id: "4",
-      email: "manager2@parth.com",
-      role: "ACCOUNT_MANAGER",
-      status: "Inactive",
-      invitedAt: "2024-01-15",
-      lastLogin: "2024-01-20",
-      assignedClientIds: ["1", "4"],
-    },
-  };
-  
-  return mockUsers[id] || null;
-};
 
 const validationSchema = yup.object({
+  full_name: yup.string().trim().required("Full name is required"),
   email: yup
     .string()
     .email("Invalid email address")
@@ -110,10 +68,44 @@ const validationSchema = yup.object({
     .string()
     .oneOf(["ADMIN", "ACCOUNT_MANAGER", "VENDOR"], "Please select a role")
     .required("Role is required"),
+  vendor_id: yup
+    .number()
+    .nullable()
+    .when("role", {
+      is: "VENDOR",
+      then: (schema) => schema.required("Vendor is required for vendor users"),
+      otherwise: (schema) => schema.nullable(),
+    }),
+});
+
+const roleToUi = (role: ApiUserRole): UserRole => {
+  if (role === "admin") return "ADMIN";
+  if (role === "account_manager") return "ACCOUNT_MANAGER";
+  return "VENDOR";
+};
+
+const roleToApi = (role: UserRole): ApiUserRole => {
+  if (role === "ADMIN") return "admin";
+  if (role === "ACCOUNT_MANAGER") return "account_manager";
+  return "vendor";
+};
+
+const mapUserFromApi = (user: ApiUser): UserDetail => ({
+  id: String(user.id),
+  full_name: user.full_name,
+  email: user.email,
+  role: roleToUi(user.role),
+  status: user.is_active ? "Active" : "Inactive",
+  createdAt: user.created_at,
+  updatedAt: user.updated_at,
+  vendor_id: user.vendor_id,
+  password: "",
 });
 
 function UserDetailContent() {
   const router = useRouter();
+  const dispatch = useAppDispatch();
+  const users = useAppSelector((state) => state.users.users);
   const params = useParams();
   const userId = params?.id as string;
   const [isLoading, setIsLoading] = useState(true);
@@ -121,25 +113,66 @@ function UserDetailContent() {
   const [isDeactivating, setIsDeactivating] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [notFoundState, setNotFoundState] = useState(false);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [initialRole, setInitialRole] = useState<UserRole>("ADMIN");
+  const [initialVendorId, setInitialVendorId] = useState<number | null>(null);
 
   const formik = useFormik<UserDetail>({
     initialValues: {
       id: "",
+      full_name: "",
       email: "",
       role: "ADMIN",
       status: "Active",
-      invitedAt: "",
-      lastLogin: null,
-      assignedClientIds: [],
+      createdAt: "",
+      updatedAt: "",
+      vendor_id: null,
+      password: "",
     },
     validationSchema,
     onSubmit: async (values) => {
       setIsSaving(true);
-      // Simulate API call - replace with actual API
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log("Saving user:", values);
-      setIsSaving(false);
-      alert("User updated successfully");
+      try {
+        if (
+          initialRole !== values.role ||
+          (values.role === "VENDOR" && initialVendorId !== values.vendor_id)
+        ) {
+          await dispatch(
+            updateUserRoleAsync({
+              userId: values.id,
+              payload: {
+            role: roleToApi(values.role),
+            vendor_id: values.role === "VENDOR" ? values.vendor_id : null,
+              },
+            })
+          ).unwrap();
+        }
+
+        const patchPayload: {
+          email?: string;
+          full_name?: string;
+          password?: string;
+          is_active?: boolean;
+        } = {
+          email: values.email.trim(),
+          full_name: values.full_name.trim(),
+          is_active: values.status === "Active",
+        };
+        if (values.password.trim()) {
+          patchPayload.password = values.password.trim();
+        }
+
+        const updated = await dispatch(
+          updateUserAsync({ userId: values.id, payload: patchPayload })
+        ).unwrap();
+        formik.setValues(mapUserFromApi(updated));
+        setInitialRole(roleToUi(updated.role));
+        setInitialVendorId(updated.vendor_id);
+      } catch (error: any) {
+        toast.error(error.message || "Failed to update user");
+      } finally {
+        setIsSaving(false);
+      }
     },
   });
 
@@ -150,27 +183,34 @@ function UserDetailContent() {
         setNotFoundState(true);
         return;
       }
-      
-      const userData = await fetchUserData(userId);
-      if (userData) {
-        formik.setValues(userData);
-      } else {
-        // User not found - trigger 404
+
+      try {
+        const existing = users.find((u) => String(u.id) === userId);
+        const userData = existing ?? (await dispatch(fetchUserByIdAsync(userId)).unwrap());
+        const mapped = mapUserFromApi(userData);
+        formik.setValues(mapped);
+        setInitialRole(mapped.role);
+        setInitialVendorId(mapped.vendor_id);
+      } catch {
         setNotFoundState(true);
       }
       setIsLoading(false);
     };
     loadUser();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [userId, users, dispatch]);
 
-  const handleClientToggle = (clientId: string) => {
-    const currentIds = formik.values.assignedClientIds;
-    const newIds = currentIds.includes(clientId)
-      ? currentIds.filter((id) => id !== clientId)
-      : [...currentIds, clientId];
-    formik.setFieldValue("assignedClientIds", newIds);
-  };
+  useEffect(() => {
+    const loadVendors = async () => {
+      try {
+        const data = await fetchVendors();
+        setVendors(data.filter((v) => v.is_active));
+      } catch {
+        // Keep page usable even if vendors endpoint fails.
+      }
+    };
+    loadVendors();
+  }, []);
 
   const handleDeactivate = () => {
     setDeactivateDialogOpen(true);
@@ -178,24 +218,29 @@ function UserDetailContent() {
 
   const confirmDeactivate = async () => {
     setIsDeactivating(true);
-    // Simulate API call - replace with actual API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    
-    formik.setFieldValue("status", "Inactive");
-    setIsDeactivating(false);
-    setDeactivateDialogOpen(false);
-    // TODO: Replace alert with toast notification
-    alert("User deactivated successfully");
+    try {
+      await dispatch(deactivateUserAsync(formik.values.id)).unwrap();
+      formik.setFieldValue("status", "Inactive");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to deactivate user");
+    } finally {
+      setIsDeactivating(false);
+      setDeactivateDialogOpen(false);
+    }
   };
 
   const handleActivate = async () => {
     setIsDeactivating(true);
-    // Simulate API call - replace with actual API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    
-    formik.setFieldValue("status", "Active");
-    setIsDeactivating(false);
-    alert("User activated successfully");
+    try {
+      await dispatch(
+        updateUserAsync({ userId: formik.values.id, payload: { is_active: true } })
+      ).unwrap();
+      formik.setFieldValue("status", "Active");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to activate user");
+    } finally {
+      setIsDeactivating(false);
+    }
   };
 
   const getRoleColor = (role: UserRole) => {
@@ -224,6 +269,8 @@ function UserDetailContent() {
     );
   }
 
+  const isViewedUserAdmin = formik.values.role === "ADMIN";
+
   return (
     <Flex direction="column" gap="4">
       <Flex align="center" gap="3">
@@ -246,6 +293,44 @@ function UserDetailContent() {
               Basic Information
             </Heading>
             <Flex direction="column" gap="4">
+              <Box>
+                <Flex align="center" gap="2" mb="2">
+                  <FiUser size={14} style={{ color: "var(--color-text-secondary)" }} />
+                  <Text
+                    size="2"
+                    weight="medium"
+                    as="label"
+                    htmlFor="full_name"
+                    className="block"
+                    style={{ color: "var(--color-text-primary)" }}
+                  >
+                    Full Name *
+                  </Text>
+                </Flex>
+                <TextField.Root
+                  id="full_name"
+                  name="full_name"
+                  type="text"
+                  value={formik.values.full_name}
+                  onChange={formik.handleChange}
+                  onBlur={formik.handleBlur}
+                  size="3"
+                  style={{
+                    background: "var(--color-dark-bg-secondary)",
+                    border:
+                      formik.touched.full_name && formik.errors.full_name
+                        ? "1px solid var(--color-error)"
+                        : "1px solid var(--color-dark-bg-tertiary)",
+                    color: "var(--color-text-primary)",
+                  }}
+                />
+                {formik.touched.full_name && formik.errors.full_name && (
+                  <Text size="1" color="red" mt="1" className="block">
+                    {formik.errors.full_name}
+                  </Text>
+                )}
+              </Box>
+
               <Box>
                 <Flex align="center" gap="2" mb="2">
                   <FiMail size={14} style={{ color: "var(--color-text-secondary)" }} />
@@ -291,24 +376,77 @@ function UserDetailContent() {
                     <Text
                       size="2"
                       weight="medium"
-                      as="label"
-                      htmlFor="role"
+                      as={isViewedUserAdmin ? "span" : "label"}
+                      htmlFor={isViewedUserAdmin ? undefined : "role"}
                       className="block"
                       style={{ color: "var(--color-text-primary)" }}
                     >
-                      Role *
+                      Role {isViewedUserAdmin ? "" : "*"}
                     </Text>
                   </Flex>
+                  {isViewedUserAdmin ? (
+                    <Badge color="red" size="2" id="role-readonly">
+                      Admin
+                    </Badge>
+                  ) : (
+                    <>
+                      <Select.Root
+                        value={formik.values.role}
+                        onValueChange={(value) => formik.setFieldValue("role", value as UserRole)}
+                      >
+                        <Select.Trigger
+                          id="role"
+                          style={{
+                            background: "var(--color-dark-bg-secondary)",
+                            border:
+                              formik.touched.role && formik.errors.role
+                                ? "1px solid var(--color-error)"
+                                : "1px solid var(--color-dark-bg-tertiary)",
+                            color: "var(--color-text-primary)",
+                            width: "100%",
+                          }}
+                        />
+                        <Select.Content>
+                          <Select.Item value="ADMIN">Admin</Select.Item>
+                          <Select.Item value="ACCOUNT_MANAGER">Account Manager</Select.Item>
+                          <Select.Item value="VENDOR">Vendor</Select.Item>
+                        </Select.Content>
+                      </Select.Root>
+                      {formik.touched.role && formik.errors.role && (
+                        <Text size="1" color="red" mt="1" className="block">
+                          {formik.errors.role}
+                        </Text>
+                      )}
+                    </>
+                  )}
+                </Box>
+
+                {!isViewedUserAdmin && (
+                <Box style={{ flex: "1", minWidth: "200px" }}>
+                  <Text
+                    size="2"
+                    weight="medium"
+                    mb="2"
+                    as="label"
+                    htmlFor="vendor_id"
+                    className="block"
+                    style={{ color: "var(--color-text-primary)" }}
+                  >
+                    Vendor {formik.values.role === "VENDOR" ? "*" : "(optional)"}
+                  </Text>
                   <Select.Root
-                    value={formik.values.role}
-                    onValueChange={(value) => formik.setFieldValue("role", value as UserRole)}
+                    value={formik.values.vendor_id ? String(formik.values.vendor_id) : ""}
+                    onValueChange={(value) =>
+                      formik.setFieldValue("vendor_id", value ? Number(value) : null)
+                    }
                   >
                     <Select.Trigger
-                      id="role"
+                      id="vendor_id"
+                      placeholder="Select vendor"
                       style={{
                         background: "var(--color-dark-bg-secondary)",
                         border:
-                          formik.touched.role && formik.errors.role
+                          formik.touched.vendor_id && formik.errors.vendor_id
                             ? "1px solid var(--color-error)"
                             : "1px solid var(--color-dark-bg-tertiary)",
                         color: "var(--color-text-primary)",
@@ -316,17 +454,20 @@ function UserDetailContent() {
                       }}
                     />
                     <Select.Content>
-                      <Select.Item value="ADMIN">Admin</Select.Item>
-                      <Select.Item value="ACCOUNT_MANAGER">Account Manager</Select.Item>
-                      <Select.Item value="VENDOR">Vendor</Select.Item>
+                      {vendors.map((vendor) => (
+                        <Select.Item key={vendor.id} value={String(vendor.id)}>
+                          {vendor.company_name}
+                        </Select.Item>
+                      ))}
                     </Select.Content>
                   </Select.Root>
-                  {formik.touched.role && formik.errors.role && (
+                  {formik.touched.vendor_id && formik.errors.vendor_id && (
                     <Text size="1" color="red" mt="1" className="block">
-                      {formik.errors.role}
+                      {String(formik.errors.vendor_id)}
                     </Text>
                   )}
                 </Box>
+                )}
 
                 <Box style={{ flex: "1", minWidth: "200px" }}>
                   <Text
@@ -347,63 +488,56 @@ function UserDetailContent() {
               <Flex gap="4" wrap="wrap">
                 <Box>
                   <Text size="2" style={{ color: "var(--color-text-secondary)", marginBottom: "4px" }}>
-                    Invited At
+                    Created At{" "}
                   </Text>
                   <Text size="3" style={{ color: "var(--color-text-primary)" }}>
-                    {new Date(formik.values.invitedAt).toLocaleDateString()}
+                    {formik.values.createdAt ? formatAppDate(formik.values.createdAt) : "—"}
                   </Text>
                 </Box>
                 <Box>
                   <Text size="2" style={{ color: "var(--color-text-secondary)", marginBottom: "4px" }}>
-                    Last Login
+                    Last Updated{" "}
                   </Text>
                   <Text size="3" style={{ color: "var(--color-text-primary)" }}>
-                    {formik.values.lastLogin
-                      ? new Date(formik.values.lastLogin).toLocaleDateString()
-                      : "Never"}
+                    {formik.values.updatedAt ? formatAppDate(formik.values.updatedAt) : "—"}
                   </Text>
                 </Box>
               </Flex>
+
+              <Box>
+                <Text
+                  size="2"
+                  weight="medium"
+                  mb="2"
+                  as="label"
+                  htmlFor="password"
+                  className="block"
+                  style={{ color: "var(--color-text-primary)" }}
+                >
+                  New Password (optional)
+                </Text>
+                <TextField.Root
+                  id="password"
+                  name="password"
+                  type="password"
+                  value={formik.values.password}
+                  onChange={formik.handleChange}
+                  onBlur={formik.handleBlur}
+                  size="3"
+                  placeholder="Leave empty to keep current password"
+                  style={{
+                    background: "var(--color-dark-bg-secondary)",
+                    border: "1px solid var(--color-dark-bg-tertiary)",
+                    color: "var(--color-text-primary)",
+                  }}
+                />
+              </Box>
             </Flex>
           </Card>
 
-          {/* Client Assignment (Only for Account Managers) */}
-          {formik.values.role === "ACCOUNT_MANAGER" && (
-            <Card style={{ padding: "1.5rem" }}>
-              <Flex align="center" gap="2" mb="4">
-                <FiUsers size={20} style={{ color: "var(--color-primary)" }} />
-                <Heading size={{ initial: "4", md: "5" }}>Assigned Clients</Heading>
-              </Flex>
-              <Text size="2" style={{ color: "var(--color-text-secondary)", marginBottom: "16px" }}>
-                Select which clients this Account Manager can access:
-              </Text>
-              <Flex direction="column" gap="3">
-                {mockClients.map((client) => (
-                  <Flex key={client.id} align="center" gap="2">
-                    <Checkbox
-                      checked={formik.values.assignedClientIds.includes(client.id)}
-                      onCheckedChange={() => handleClientToggle(client.id)}
-                    />
-                    <Text 
-                      size="3" 
-                      style={{ color: "var(--color-text-primary)", cursor: "pointer" }}
-                      onClick={() => handleClientToggle(client.id)}
-                    >
-                      {client.name}
-                    </Text>
-                  </Flex>
-                ))}
-              </Flex>
-              {formik.values.assignedClientIds.length === 0 && (
-                <Text size="2" style={{ color: "var(--color-text-secondary)", marginTop: "12px" }}>
-                  No clients assigned. This Account Manager will not have access to any clients.
-                </Text>
-              )}
-            </Card>
-          )}
-
           {/* Action Buttons */}
           <Flex gap="3" justify="between" wrap="wrap">
+            {!isViewedUserAdmin && (
             <Flex gap="3">
               {formik.values.status === "Active" ? (
                 <Button
@@ -437,6 +571,7 @@ function UserDetailContent() {
                 </Button>
               )}
             </Flex>
+            )}
             <Flex gap="3">
               <Button
                 type="button"

@@ -30,6 +30,8 @@ export interface SalesOrderApiResponse {
   client_name: string;
   ship_to_address_id: number | null;
   status: string;
+  /** Billing / payment lifecycle (snake_case from API). */
+  payment_status?: string | null;
   order_date: string | null;
   due_date: string | null;
   original_pdf_url: string | null;
@@ -57,7 +59,7 @@ export interface CreateSalesOrderRequest {
     sku_id: number;
     line_number: number;
     ordered_qty: number;
-    unit_price: number;
+    unit_price?: number;
     due_date?: string | null;
   }[];
 }
@@ -74,7 +76,7 @@ export interface CreateSalesOrderLineRequest {
   sku_id: number;
   line_number: number;
   ordered_qty: number;
-  unit_price: number;
+  unit_price?: number;
   due_date?: string | null;
 }
 

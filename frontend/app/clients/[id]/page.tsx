@@ -21,7 +21,8 @@ import {
   UpdateClientRequest,
   ContactRequest,
   AddressRequest,
-  Client 
+  Client,
+  isClientShipToAddress,
 } from "@/lib/store/clientsSlice";
 import DeleteConfirmationDialog from "@/components/DeleteConfirmationDialog";
 import { toast } from "react-toastify";
@@ -59,6 +60,69 @@ interface ShipToAddress {
   isDefault: boolean;
 }
 
+function emptyBillingAddressForm(): ShipToAddress {
+  return {
+    id: "",
+    label: "",
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    zipCode: "",
+    country: "US",
+    isDefault: false,
+  };
+}
+
+function isBillingAddressFilled(b: ShipToAddress): boolean {
+  return !!(
+    b.label?.trim() &&
+    b.addressLine1?.trim() &&
+    b.city?.trim() &&
+    b.state?.trim() &&
+    b.zipCode?.trim() &&
+    b.country?.trim()
+  );
+}
+
+function billingHasPersistedServerId(b: ShipToAddress): boolean {
+  return b.id !== "" && !Number.isNaN(Number(b.id)) && Number(b.id) > 0;
+}
+
+function billingHasAnyInput(b: ShipToAddress): boolean {
+  return [b.label, b.addressLine1, b.addressLine2, b.city, b.state, b.zipCode, b.country].some((x) =>
+    (x || "").trim()
+  );
+}
+
+function toShipToAddressRequest(address: ShipToAddress): AddressRequest {
+  return {
+    label: address.label || "",
+    address_line_1: address.addressLine1 || "",
+    address_line_2: address.addressLine2 || "",
+    city: address.city || "",
+    state: address.state || "",
+    zip_code: address.zipCode || "",
+    country: address.country || "US",
+    is_default: address.isDefault || false,
+    address_type: "ship_to",
+  };
+}
+
+function toBillingAddressRequest(address: ShipToAddress): AddressRequest {
+  return {
+    label: address.label.trim() || "Billing",
+    address_line_1: address.addressLine1 || "",
+    address_line_2: address.addressLine2 || "",
+    city: address.city || "",
+    state: address.state || "",
+    zip_code: address.zipCode || "",
+    country: address.country || "US",
+    is_default: false,
+    address_type: "billing",
+  };
+}
+
 interface ClientFormData {
   companyName: string;
   notes: string;
@@ -68,6 +132,7 @@ interface ClientFormData {
   discountPercent: number;
   autoInvoice: boolean;
   addresses: ShipToAddress[];
+  billingAddress: ShipToAddress;
 }
 
 const validationSchema = yup.object({
@@ -110,6 +175,31 @@ const validationSchema = yup.object({
       isDefault: yup.boolean(),
     })
   ),
+  billingAddress: yup
+    .object({
+      id: yup.string(),
+      label: yup.string(),
+      addressLine1: yup.string(),
+      addressLine2: yup.string(),
+      city: yup.string(),
+      state: yup.string(),
+      zipCode: yup.string(),
+      country: yup.string(),
+      isDefault: yup.boolean(),
+    })
+    .test(
+      "billing-complete",
+      "Complete all billing fields or leave them empty",
+      (v) => {
+        if (!v) return true;
+        const parts = [v.label, v.addressLine1, v.city, v.state, v.zipCode, v.country].map((s) =>
+          (s || "").trim()
+        );
+        const any = parts.some(Boolean);
+        if (!any) return true;
+        return parts.every(Boolean);
+      }
+    ),
 });
 
 // Helper function to map API client data to form data
@@ -128,17 +218,36 @@ const mapClientToFormData = (client: Client): ClientFormData => {
     taxPercent: parseFloat(client.tax_percentage || "0"),
     discountPercent: parseFloat(client.discount_percentage || "0"),
     autoInvoice: client.auto_invoice,
-    addresses: (client.addresses || []).map((addr) => ({
-      id: addr.id?.toString() || "",
-      label: addr.label || "",
-      addressLine1: addr.address_line_1 || "",
-      addressLine2: addr.address_line_2 || "",
-      city: addr.city || "",
-      state: addr.state || "",
-      zipCode: addr.zip_code || "",
-      country: addr.country || "",
-      isDefault: addr.is_default || false,
-    })),
+    addresses: (client.addresses || [])
+      .filter(isClientShipToAddress)
+      .map((addr) => ({
+        id: addr.id?.toString() || "",
+        label: addr.label || "",
+        addressLine1: addr.address_line_1 || "",
+        addressLine2: addr.address_line_2 || "",
+        city: addr.city || "",
+        state: addr.state || "",
+        zipCode: addr.zip_code || "",
+        country: addr.country || "",
+        isDefault: addr.is_default || false,
+      })),
+    billingAddress: (() => {
+      const b = (client.addresses || []).find(
+        (a) => String(a.address_type || "").toLowerCase() === "billing"
+      );
+      if (!b) return emptyBillingAddressForm();
+      return {
+        id: b.id?.toString() || "",
+        label: b.label || "",
+        addressLine1: b.address_line_1 || "",
+        addressLine2: b.address_line_2 || "",
+        city: b.city || "",
+        state: b.state || "",
+        zipCode: b.zip_code || "",
+        country: b.country || "",
+        isDefault: false,
+      };
+    })(),
   };
 };
 
@@ -156,22 +265,29 @@ function ClientProfileContent() {
   // Track original contacts and addresses for cancel functionality
   const [originalContacts, setOriginalContacts] = useState<Contact[]>([]);
   const [originalAddresses, setOriginalAddresses] = useState<ShipToAddress[]>([]);
-  
+  const [originalBillingAddress, setOriginalBillingAddress] = useState<ShipToAddress>(() =>
+    emptyBillingAddressForm()
+  );
+
   // Track which contacts/addresses are being edited
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
-  
+  const [editingBillingAddress, setEditingBillingAddress] = useState(false);
+
   // Track loading states for individual contacts/addresses
   const [savingContactId, setSavingContactId] = useState<string | null>(null);
   const [savingAddressId, setSavingAddressId] = useState<string | null>(null);
-  
+  const [savingBillingAddress, setSavingBillingAddress] = useState(false);
+
   // Track delete dialogs for contacts and addresses
   const [deleteContactDialogOpen, setDeleteContactDialogOpen] = useState(false);
   const [deleteAddressDialogOpen, setDeleteAddressDialogOpen] = useState(false);
+  const [deleteBillingDialogOpen, setDeleteBillingDialogOpen] = useState(false);
   const [contactToDelete, setContactToDelete] = useState<string | null>(null);
   const [addressToDelete, setAddressToDelete] = useState<string | null>(null);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
   const [isDeletingAddress, setIsDeletingAddress] = useState(false);
+  const [isDeletingBilling, setIsDeletingBilling] = useState(false);
   
   // Track original form values to detect changes
   const [originalFormValues, setOriginalFormValues] = useState<ClientFormData | null>(null);
@@ -194,6 +310,7 @@ function ClientProfileContent() {
       discountPercent: 0,
       autoInvoice: false,
       addresses: [],
+      billingAddress: emptyBillingAddressForm(),
     },
     validationSchema,
     onSubmit: async (values) => {
@@ -215,16 +332,34 @@ function ClientProfileContent() {
               email: contact.email,
               phone: contact.phone,
             })),
-            addresses: values.addresses.map((addr) => ({
-              label: addr.label,
-              address_line_1: addr.addressLine1,
-              address_line_2: addr.addressLine2 || "",
-              city: addr.city,
-              state: addr.state,
-              zip_code: addr.zipCode,
-              country: addr.country,
-              is_default: addr.isDefault || false,
-            })),
+            addresses: [
+              ...values.addresses.map((addr) => ({
+                label: addr.label,
+                address_line_1: addr.addressLine1,
+                address_line_2: addr.addressLine2 || "",
+                city: addr.city,
+                state: addr.state,
+                zip_code: addr.zipCode,
+                country: addr.country,
+                is_default: addr.isDefault || false,
+                address_type: "ship_to" as const,
+              })),
+              ...(isBillingAddressFilled(values.billingAddress)
+                ? [
+                    {
+                      label: values.billingAddress.label.trim() || "Billing",
+                      address_line_1: values.billingAddress.addressLine1,
+                      address_line_2: values.billingAddress.addressLine2 || "",
+                      city: values.billingAddress.city,
+                      state: values.billingAddress.state,
+                      zip_code: values.billingAddress.zipCode,
+                      country: values.billingAddress.country,
+                      is_default: false,
+                      address_type: "billing" as const,
+                    },
+                  ]
+                : []),
+            ],
           };
 
           const newClient = await dispatch(createClientAsync(createRequest)).unwrap();
@@ -235,6 +370,7 @@ function ClientProfileContent() {
             setOriginalFormValues(JSON.parse(JSON.stringify(formData)));
             setOriginalContacts(JSON.parse(JSON.stringify(formData.contacts)));
             setOriginalAddresses(JSON.parse(JSON.stringify(formData.addresses)));
+            setOriginalBillingAddress(JSON.parse(JSON.stringify(formData.billingAddress)));
             router.replace(`/clients/${newClient.id}`);
           }
         } catch (error: any) {
@@ -269,6 +405,7 @@ function ClientProfileContent() {
             // Also update original contacts and addresses
             setOriginalContacts(JSON.parse(JSON.stringify(formData.contacts)));
             setOriginalAddresses(JSON.parse(JSON.stringify(formData.addresses)));
+            setOriginalBillingAddress(JSON.parse(JSON.stringify(formData.billingAddress)));
           }
         } catch (error: any) {
           console.error("Error updating client:", error);
@@ -320,6 +457,7 @@ function ClientProfileContent() {
             // Store original contacts and addresses for cancel functionality
             setOriginalContacts(JSON.parse(JSON.stringify(formData.contacts)));
             setOriginalAddresses(JSON.parse(JSON.stringify(formData.addresses)));
+            setOriginalBillingAddress(JSON.parse(JSON.stringify(formData.billingAddress)));
             // Store original form values to detect changes
             setOriginalFormValues(JSON.parse(JSON.stringify(formData)));
           }
@@ -634,24 +772,15 @@ function ClientProfileContent() {
         
         if (isExistingAddress) {
           // Update existing address via PATCH
-          const addressData: AddressRequest = {
-            label: address.label || "",
-            address_line_1: address.addressLine1 || "",
-            address_line_2: address.addressLine2 || "",
-            city: address.city || "",
-            state: address.state || "",
-            zip_code: address.zipCode || "",
-            country: address.country || "US",
-            is_default: address.isDefault || false,
-          };
-          const result = await dispatch(
+          const addressData = toShipToAddressRequest(address);
+          await dispatch(
             updateAddressAsync({
               clientId: parseInt(clientId),
               addressId: Number(id),
               addressData,
             })
           ).unwrap();
-          
+
           setEditingAddressId(null);
           // Update original addresses
           const updatedOriginals = [...originalAddresses];
@@ -663,16 +792,7 @@ function ClientProfileContent() {
           // Success toast is already shown in the slice
         } else {
           // Create new address via POST
-          const addressData: AddressRequest = {
-            label: address.label || "",
-            address_line_1: address.addressLine1 || "",
-            address_line_2: address.addressLine2 || "",
-            city: address.city || "",
-            state: address.state || "",
-            zip_code: address.zipCode || "",
-            country: address.country || "US",
-            is_default: address.isDefault || false,
-          };
+          const addressData = toShipToAddressRequest(address);
           const result = await dispatch(
             createAddressAsync({ clientId: parseInt(clientId), addressData })
           ).unwrap();
@@ -712,6 +832,113 @@ function ClientProfileContent() {
       );
     }
     setEditingAddressId(null);
+  };
+
+  const updateBillingField = (field: keyof ShipToAddress, value: string) => {
+    formik.setFieldValue("billingAddress", {
+      ...formik.values.billingAddress,
+      [field]: value,
+    });
+    if (!isNew) {
+      setEditingBillingAddress(true);
+    }
+  };
+
+  const saveBillingAddress = async () => {
+    const b = formik.values.billingAddress;
+    const orig = originalBillingAddress;
+    const hadServerId =
+      orig.id !== "" && !Number.isNaN(Number(orig.id)) && Number(orig.id) > 0;
+
+    setSavingBillingAddress(true);
+    try {
+      if (isNew) {
+        setEditingBillingAddress(false);
+        setOriginalBillingAddress(JSON.parse(JSON.stringify(b)));
+        toast.success("Billing address saved (will be created with client)");
+      } else if (clientId) {
+        if (!isBillingAddressFilled(b)) {
+          if (hadServerId) {
+            await dispatch(
+              deleteAddressAsync({
+                clientId: parseInt(clientId, 10),
+                addressId: Number(orig.id),
+              })
+            ).unwrap();
+          }
+          const empty = emptyBillingAddressForm();
+          formik.setFieldValue("billingAddress", empty);
+          setOriginalBillingAddress(JSON.parse(JSON.stringify(empty)));
+          setEditingBillingAddress(false);
+        } else {
+          const addressData = toBillingAddressRequest(b);
+          const persistedBilling =
+            b.id !== "" && !Number.isNaN(Number(b.id)) && Number(b.id) > 0;
+
+          if (persistedBilling) {
+            await dispatch(
+              updateAddressAsync({
+                clientId: parseInt(clientId, 10),
+                addressId: Number(b.id),
+                addressData,
+              })
+            ).unwrap();
+            setEditingBillingAddress(false);
+            setOriginalBillingAddress(JSON.parse(JSON.stringify(b)));
+          } else {
+            const result = await dispatch(
+              createAddressAsync({ clientId: parseInt(clientId, 10), addressData })
+            ).unwrap();
+            const newId = result.address.id.toString();
+            const next = { ...b, id: newId };
+            formik.setFieldValue("billingAddress", next);
+            setEditingBillingAddress(false);
+            setOriginalBillingAddress(JSON.parse(JSON.stringify(next)));
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error("Error saving billing address:", error);
+    } finally {
+      setSavingBillingAddress(false);
+    }
+  };
+
+  const cancelBillingEdit = () => {
+    formik.setFieldValue("billingAddress", JSON.parse(JSON.stringify(originalBillingAddress)));
+    setEditingBillingAddress(false);
+  };
+
+  const removeBillingAddress = () => {
+    setDeleteBillingDialogOpen(true);
+  };
+
+  const confirmDeleteBilling = async () => {
+    if (!clientId) return;
+    const b = formik.values.billingAddress;
+    const hadServerId =
+      b.id !== "" && !Number.isNaN(Number(b.id)) && Number(b.id) > 0;
+
+    setIsDeletingBilling(true);
+    try {
+      if (!isNew && hadServerId) {
+        await dispatch(
+          deleteAddressAsync({
+            clientId: parseInt(clientId, 10),
+            addressId: Number(b.id),
+          })
+        ).unwrap();
+      }
+      const empty = emptyBillingAddressForm();
+      formik.setFieldValue("billingAddress", empty);
+      setOriginalBillingAddress(JSON.parse(JSON.stringify(empty)));
+      setEditingBillingAddress(false);
+    } catch (error: any) {
+      console.error("Error deleting billing address:", error);
+    } finally {
+      setIsDeletingBilling(false);
+      setDeleteBillingDialogOpen(false);
+    }
   };
 
   if (isLoading) {
@@ -1167,10 +1394,10 @@ function ClientProfileContent() {
             </Flex>
           </Card>
 
-          {/* Addresses Card */}
+          {/* Ship-to addresses */}
           <Card style={{ padding: "1.5rem" }}>
             <Flex align="center" justify="between" mb="4">
-              <Heading size={{ initial: "4", md: "5" }}>Addresses</Heading>
+              <Heading size={{ initial: "4", md: "5" }}>Ship-to addresses</Heading>
               <Button
                 type="button"
                 size="2"
@@ -1365,6 +1592,154 @@ function ClientProfileContent() {
             )}
           </Card>
 
+          {/* Billing address (single) */}
+          <Card style={{ padding: "1.5rem" }}>
+            <Flex align="center" justify="between" mb="4">
+              <Heading size={{ initial: "4", md: "5" }}>Billing address</Heading>
+              <Button
+                type="button"
+                size="1"
+                variant="ghost"
+                onClick={removeBillingAddress}
+                disabled={
+                  !billingHasAnyInput(formik.values.billingAddress) &&
+                  !billingHasPersistedServerId(formik.values.billingAddress)
+                }
+                style={{
+                  color:
+                    billingHasAnyInput(formik.values.billingAddress) ||
+                    billingHasPersistedServerId(formik.values.billingAddress)
+                      ? "var(--color-error)"
+                      : "var(--color-text-secondary)",
+                }}
+              >
+                <FiTrash2 size={16} />
+              </Button>
+            </Flex>
+            <Text size="2" mb="3" style={{ color: "var(--color-text-secondary)" }}>
+              One billing address for invoices and payments.
+            </Text>
+            <Flex direction="column" gap="3">
+              <TextField.Root
+                placeholder="Label *"
+                value={formik.values.billingAddress.label || ""}
+                onChange={(e) => updateBillingField("label", e.target.value)}
+                size="3"
+                style={{
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+              <TextField.Root
+                placeholder="Address Line 1 *"
+                value={formik.values.billingAddress.addressLine1 || ""}
+                onChange={(e) => updateBillingField("addressLine1", e.target.value)}
+                size="3"
+                style={{
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+              <TextField.Root
+                placeholder="Address Line 2 (Optional)"
+                value={formik.values.billingAddress.addressLine2 || ""}
+                onChange={(e) => updateBillingField("addressLine2", e.target.value)}
+                size="3"
+                style={{
+                  background: "var(--color-dark-bg-secondary)",
+                  border: "1px solid var(--color-dark-bg-tertiary)",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+              <Flex gap="3" wrap="wrap">
+                <Box style={{ flex: "1", minWidth: "200px" }}>
+                  <TextField.Root
+                    placeholder="City *"
+                    value={formik.values.billingAddress.city || ""}
+                    onChange={(e) => updateBillingField("city", e.target.value)}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border: "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="State *"
+                    value={formik.values.billingAddress.state || ""}
+                    onChange={(e) => updateBillingField("state", e.target.value)}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border: "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="ZIP Code *"
+                    value={formik.values.billingAddress.zipCode || ""}
+                    onChange={(e) => updateBillingField("zipCode", e.target.value)}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border: "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                </Box>
+                <Box style={{ flex: "1", minWidth: "150px" }}>
+                  <TextField.Root
+                    placeholder="Country *"
+                    value={formik.values.billingAddress.country || ""}
+                    onChange={(e) => updateBillingField("country", e.target.value)}
+                    size="3"
+                    style={{
+                      background: "var(--color-dark-bg-secondary)",
+                      border: "1px solid var(--color-dark-bg-tertiary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  />
+                </Box>
+              </Flex>
+              {!isNew && editingBillingAddress && (
+                <Flex gap="2" justify="end" mt="3">
+                  <Button
+                    type="button"
+                    size="2"
+                    variant="soft"
+                    onClick={cancelBillingEdit}
+                    style={{ color: "var(--color-text-primary)" }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="2"
+                    onClick={saveBillingAddress}
+                    disabled={savingBillingAddress}
+                    style={{
+                      background: savingBillingAddress
+                        ? "var(--color-disabled-bg)"
+                        : "var(--color-primary)",
+                      color: savingBillingAddress
+                        ? "var(--color-disabled-text)"
+                        : "var(--color-text-dark)",
+                      fontWeight: "600",
+                    }}
+                  >
+                    {savingBillingAddress ? "Saving..." : "Save billing address"}
+                  </Button>
+                </Flex>
+              )}
+            </Flex>
+          </Card>
+
           {/* Action Buttons for New Clients - Show at bottom */}
           {isNew && (
             <Flex gap="3" justify="end" wrap="wrap">
@@ -1461,6 +1836,15 @@ function ClientProfileContent() {
         title="Confirm Delete Address"
         description="Are you sure you want to delete this address? This action cannot be undone."
         isLoading={isDeletingAddress}
+      />
+
+      <DeleteConfirmationDialog
+        open={deleteBillingDialogOpen}
+        onOpenChange={setDeleteBillingDialogOpen}
+        onConfirm={confirmDeleteBilling}
+        title="Confirm Delete Billing Address"
+        description="Are you sure you want to remove this billing address? This action cannot be undone."
+        isLoading={isDeletingBilling}
       />
     </Flex>
   );
