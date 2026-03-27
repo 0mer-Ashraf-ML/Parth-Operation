@@ -91,10 +91,18 @@ class POUpdate(BaseModel):
 
     Header status is normally derived from lines; you may set status to
     COMPLETED to close the PO and mark every line fully delivered.
+
+    vendor_id: reassign the PO to a different vendor.  All PO line
+    unit_cost values are automatically refreshed from the new vendor's
+    SKUVendor.vendor_cost (set to None for SKUs that vendor doesn't supply).
     """
     status: Optional[POStatus] = Field(
         None,
         description="Set to completed to mark all lines delivered and close the PO",
+    )
+    vendor_id: Optional[int] = Field(
+        None,
+        description="Reassign PO to a different vendor; line costs auto-update",
     )
     shipment_type: Optional[ShipmentType] = Field(
         None,

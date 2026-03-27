@@ -13,6 +13,13 @@ Key business rules:
       - Admin: can record events for any PO line.
       - AM: can record events only for POs whose SO belongs to assigned clients.
       - Vendor: can record events only for their own POs.
+
+  Inventory tracking (in-house POs only, SKU.track_inventory=True):
+      • +inventory when PO line status reaches READY_FOR_PICKUP
+        (goods arrive at warehouse from vendor).
+      • −inventory when a fulfillment event is recorded
+        (goods leave warehouse to customer).
+      • Drop-ship POs NEVER affect inventory (goods ship vendor → customer).
 """
 
 from sqlalchemy import func as sa_func, select
@@ -99,8 +106,10 @@ def record_fulfillment_event(
     prev_delivered = current_delivered
     po_line.delivered_qty = new_total
 
-    # 5. Auto-adjust inventory: increment when goods received from vendor
-    _adjust_inventory(db, po_line.sku_id, +data.quantity)
+    # 5. Auto-adjust inventory (in-house only): goods leaving warehouse
+    po = po_line.purchase_order
+    if po and po.shipment_type == ShipmentType.IN_HOUSE:
+        _adjust_inventory(db, po_line.sku_id, -data.quantity)
 
     # 5b. Align line status with delivered vs ordered qty (drop-ship vs in-house)
     sync_po_line_status_from_delivered_qty(
@@ -284,17 +293,21 @@ def sync_po_line_status_from_delivered_qty(
     prev_delivered: int,
 ) -> None:
     """
-    Derive PO line status from delivered_qty vs quantity and apply inventory
-    when entering/leaving DELIVERED (drop-ship only for auto-DELIVERED).
+    Derive PO line status from delivered_qty vs quantity.
 
-    • delivered_qty <= 0  → IN_PRODUCTION
-    • 0 < delivered_qty < quantity → PACKED_AND_SHIPPED
-    • delivered_qty >= quantity:
-        - Drop-ship → DELIVERED
-        - In-house → READY_FOR_PICKUP unless already DELIVERED (admin-confirmed)
+    Drop-ship:
+      • delivered_qty <= 0            → IN_PRODUCTION
+      • 0 < delivered_qty < quantity  → PACKED_AND_SHIPPED
+      • delivered_qty >= quantity      → DELIVERED
 
-    Used after fulfillment events and PATCH delivered_qty only — not for
-    pure manual status transitions.
+    In-house:
+      Never downgrade from READY_FOR_PICKUP or DELIVERED — those are
+      manual status transitions.  For earlier statuses, same rules as
+      drop-ship (but caps at PACKED_AND_SHIPPED, not auto-DELIVERED).
+
+    No inventory changes here — inventory is handled by:
+      • +qty on status → READY_FOR_PICKUP  (in update_po_line)
+      • −qty on fulfillment events          (in record_fulfillment_event)
     """
     if line.quantity <= 0:
         return
@@ -302,36 +315,22 @@ def sync_po_line_status_from_delivered_qty(
     po = line.purchase_order
     shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
 
+    if shipment == ShipmentType.IN_HOUSE:
+        if prev_status in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
+            return
+
     d, q = line.delivered_qty, line.quantity
     if d <= 0:
         new_status = POLineStatus.IN_PRODUCTION
     elif d < q:
         new_status = POLineStatus.PACKED_AND_SHIPPED
     elif shipment == ShipmentType.IN_HOUSE:
-        new_status = (
-            POLineStatus.DELIVERED
-            if prev_status == POLineStatus.DELIVERED
-            else POLineStatus.READY_FOR_PICKUP
-        )
+        new_status = POLineStatus.PACKED_AND_SHIPPED
     else:
         new_status = POLineStatus.DELIVERED
 
-    need_inv_leave = (
-        prev_status == POLineStatus.DELIVERED and new_status != POLineStatus.DELIVERED
-    )
-    need_inv_enter = (
-        new_status == POLineStatus.DELIVERED and prev_status != POLineStatus.DELIVERED
-    )
-    if line.status == new_status and not need_inv_leave and not need_inv_enter:
-        return
-
-    if need_inv_leave:
-        _adjust_inventory(db, line.sku_id, +prev_delivered)
-
-    if need_inv_enter:
-        _adjust_inventory(db, line.sku_id, -line.delivered_qty)
-
-    line.status = new_status
+    if line.status != new_status:
+        line.status = new_status
 
 
 def _get_po_line_or_404(db: Session, po_line_id: int) -> POLine:

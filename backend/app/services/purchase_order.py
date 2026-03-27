@@ -378,16 +378,51 @@ def update_purchase_order(
             for line in po.lines or []:
                 old_st = line.status
                 old_d = line.delivered_qty
-                gap = max(0, line.quantity - old_d)
-                if gap:
-                    _adjust_inventory(db, line.sku_id, +gap)
+
+                if po.shipment_type == ShipmentType.IN_HOUSE:
+                    if old_st == POLineStatus.READY_FOR_PICKUP:
+                        remaining = line.quantity - old_d
+                        if remaining > 0:
+                            _adjust_inventory(db, line.sku_id, -remaining)
+                    elif old_st not in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
+                        pass
+
                 line.delivered_qty = line.quantity
-                if old_st != POLineStatus.DELIVERED:
-                    _adjust_inventory(db, line.sku_id, -line.quantity)
                 line.status = POLineStatus.DELIVERED
             db.flush()
             derive_and_persist_po_status(db, po)
             derive_and_persist_so_status(db, po.sales_order_id)
+
+    # ── Vendor reassignment (auto-updates line costs) ──────
+    if "vendor_id" in kwargs and kwargs["vendor_id"] is not None:
+        new_vendor_id = kwargs["vendor_id"]
+        if po.status == POStatus.COMPLETED:
+            raise BadRequestException(
+                "Cannot change vendor on a COMPLETED PO"
+            )
+        if new_vendor_id != po.vendor_id:
+            new_vendor = db.execute(
+                select(Vendor).where(Vendor.id == new_vendor_id)
+            ).scalar_one_or_none()
+            if new_vendor is None:
+                raise BadRequestException(
+                    f"Vendor with id={new_vendor_id} not found"
+                )
+            po.vendor_id = new_vendor_id
+
+            po_with_lines = db.execute(
+                select(PurchaseOrder)
+                .options(selectinload(PurchaseOrder.lines))
+                .where(PurchaseOrder.id == po.id)
+            ).scalar_one()
+            for line in po_with_lines.lines or []:
+                sv = db.execute(
+                    select(SKUVendor).where(
+                        SKUVendor.sku_id == line.sku_id,
+                        SKUVendor.vendor_id == new_vendor_id,
+                    )
+                ).scalar_one_or_none()
+                line.unit_cost = sv.vendor_cost if sv else None
 
     # ── Shipment type change ───────────────────────────────
     if "shipment_type" in kwargs and kwargs["shipment_type"] is not None:
@@ -458,7 +493,8 @@ def update_po_line(
         old_d = line.delivered_qty
         delta = new_d - old_d
         if delta:
-            _adjust_inventory(db, line.sku_id, +delta)
+            if po.shipment_type == ShipmentType.IN_HOUSE:
+                _adjust_inventory(db, line.sku_id, -delta)
             line.delivered_qty = new_d
             sync_po_line_status_from_delivered_qty(
                 db,
@@ -486,19 +522,29 @@ def update_po_line(
                 )
 
             old_status = line.status
+
+            # In-house inventory: +qty when goods arrive at warehouse
             if (
-                new_status == POLineStatus.DELIVERED
-                and line.delivered_qty < line.quantity
+                po.shipment_type == ShipmentType.IN_HOUSE
+                and new_status == POLineStatus.READY_FOR_PICKUP
             ):
-                gap = line.quantity - line.delivered_qty
-                _adjust_inventory(db, line.sku_id, +gap)
+                _adjust_inventory(db, line.sku_id, +line.quantity)
+
+            # In-house inventory: when admin marks DELIVERED, subtract
+            # whatever is still in the warehouse (qty − already delivered).
+            if (
+                po.shipment_type == ShipmentType.IN_HOUSE
+                and new_status == POLineStatus.DELIVERED
+                and old_status == POLineStatus.READY_FOR_PICKUP
+            ):
+                remaining = line.quantity - line.delivered_qty
+                if remaining > 0:
+                    _adjust_inventory(db, line.sku_id, -remaining)
+
+            if new_status == POLineStatus.DELIVERED and line.delivered_qty < line.quantity:
                 line.delivered_qty = line.quantity
 
             line.status = new_status
-
-            # Auto-adjust inventory: decrement when PO line reaches DELIVERED
-            if new_status == POLineStatus.DELIVERED and old_status != POLineStatus.DELIVERED:
-                _adjust_inventory(db, line.sku_id, -line.delivered_qty)
 
     if "due_date" in kwargs:
         line.due_date = kwargs["due_date"]
