@@ -56,6 +56,7 @@ export interface UpdatePurchaseOrderRequest {
 export interface UpdatePurchaseOrderLineRequest {
   status?: string;
   ordered_qty?: number;
+  delivered_qty?: number;
   due_date?: string | null;
   expected_ship_date?: string | null;
   expected_arrival_date?: string | null;

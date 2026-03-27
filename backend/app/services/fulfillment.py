@@ -14,12 +14,9 @@ Key business rules:
       - AM: can record events only for POs whose SO belongs to assigned clients.
       - Vendor: can record events only for their own POs.
 
-  Inventory tracking (in-house POs only, SKU.track_inventory=True):
-      • +inventory when PO line status reaches READY_FOR_PICKUP
-        (goods arrive at warehouse from vendor).
-      • −inventory when a fulfillment event is recorded
-        (goods leave warehouse to customer).
-      • Drop-ship POs NEVER affect inventory (goods ship vendor → customer).
+  Inventory tracking:
+      • Fulfillment events do not adjust inventory in the current flow.
+      • Inventory adjustments are handled from PO-side received quantity updates.
 """
 
 from sqlalchemy import func as sa_func, select
@@ -106,12 +103,7 @@ def record_fulfillment_event(
     prev_delivered = current_delivered
     po_line.delivered_qty = new_total
 
-    # 5. Auto-adjust inventory (in-house only): goods leaving warehouse
-    po = po_line.purchase_order
-    if po and po.shipment_type == ShipmentType.IN_HOUSE:
-        _adjust_inventory(db, po_line.sku_id, -data.quantity)
-
-    # 5b. Align line status with delivered vs ordered qty (drop-ship vs in-house)
+    # 5. Align line status with delivered vs ordered qty (drop-ship vs in-house)
     sync_po_line_status_from_delivered_qty(
         db,
         po_line,
@@ -305,9 +297,8 @@ def sync_po_line_status_from_delivered_qty(
       manual status transitions.  For earlier statuses, same rules as
       drop-ship (but caps at PACKED_AND_SHIPPED, not auto-DELIVERED).
 
-    No inventory changes here — inventory is handled by:
-      • +qty on status → READY_FOR_PICKUP  (in update_po_line)
-      • −qty on fulfillment events          (in record_fulfillment_event)
+    No inventory changes here — inventory is handled by
+    PO-side received quantity updates.
     """
     if line.quantity <= 0:
         return
