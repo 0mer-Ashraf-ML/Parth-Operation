@@ -21,7 +21,6 @@ import {
   type UpdatePurchaseOrderLineRequest,
 } from "@/lib/api/services/purchaseOrdersService";
 import {
-  createPOFulfillmentEvent,
   getPOFulfillmentOverview,
   getPOLineFulfillment,
   type POFulfillmentEvent,
@@ -217,7 +216,6 @@ function PODetailContent() {
   const [deliveryDialogOpen, setDeliveryDialogOpen] = useState(false);
   const [selectedLineItem, setSelectedLineItem] = useState<PurchaseOrderLine | null>(null);
   const [deliveryQuantity, setDeliveryQuantity] = useState<string>("");
-  const [deliveryNotes, setDeliveryNotes] = useState<string>("");
   const [loadingFulfillmentLines, setLoadingFulfillmentLines] = useState<Set<number>>(new Set());
   const [fulfillmentModalOpen, setFulfillmentModalOpen] = useState(false);
   const [selectedLineForFulfillment, setSelectedLineForFulfillment] = useState<PurchaseOrderLine | null>(null);
@@ -511,7 +509,6 @@ function PODetailContent() {
   const openDeliveryDialog = (lineItem: PurchaseOrderLine) => {
     setSelectedLineItem(lineItem);
     setDeliveryQuantity("");
-    setDeliveryNotes("");
     setDeliveryDialogOpen(true);
   };
 
@@ -525,39 +522,27 @@ function PODetailContent() {
     }
 
     if (quantity > selectedLineItem.remainingQty) {
-      toast.error(`Cannot deliver more than ${selectedLineItem.remainingQty} remaining units`);
+      toast.error(`Cannot receive more than ${selectedLineItem.remainingQty} remaining units`);
       return;
     }
 
     try {
       setIsSaving(true);
       
-      // Call the fulfillment events API for PO line
-      await createPOFulfillmentEvent({
-        po_line_id: selectedLineItem.id,
-        quantity: quantity,
-        source: "ui",
-        notes: deliveryNotes || null,
+      await updatePurchaseOrderLine(parseInt(poId), selectedLineItem.id, {
+        delivered_qty: selectedLineItem.deliveredQty + quantity,
       });
 
-      toast.success("Delivery event recorded successfully");
+      toast.success("Received quantity recorded successfully");
       
-      // Reload PO data to get updated delivery quantities and events
       await loadPOData();
-      
-      // If fulfillment modal is open for this line, reload its fulfillment data
-      if (selectedLineForFulfillment && selectedLineForFulfillment.id === selectedLineItem.id) {
-        await handleLoadFulfillmentData(selectedLineItem.id);
-      }
-      
-      // Reset form and close dialog
+
       setDeliveryQuantity("");
-      setDeliveryNotes("");
       setDeliveryDialogOpen(false);
       setSelectedLineItem(null);
     } catch (error: any) {
-      toast.error(error.message || "Failed to record delivery event");
-      console.error("Error recording delivery:", error);
+      toast.error(error.message || "Failed to record received quantity");
+      console.error("Error recording received quantity:", error);
     } finally {
       setIsSaving(false);
     }
@@ -943,28 +928,6 @@ function PODetailContent() {
           <Heading size={{ initial: "4", md: "5" }}>
             Line Items
           </Heading>
-          <Button
-            size="2"
-            variant="soft"
-            onClick={async () => {
-              if (!poId) return;
-              try {
-                setIsLoadingOverview(true);
-                const overview = await getPOFulfillmentOverview(parseInt(poId));
-                setOverviewData(overview);
-                setOverviewModalOpen(true);
-              } catch (error: any) {
-                toast.error(error.message || "Failed to load fulfillment overview");
-                console.error("Error loading overview:", error);
-              } finally {
-                setIsLoadingOverview(false);
-              }
-            }}
-            disabled={isLoadingOverview}
-            style={{ color: "var(--color-text-primary)" }}
-          >
-            {isLoadingOverview ? "Loading..." : "View Overview"}
-          </Button>
         </Flex>
         <Box style={{ overflowX: "auto" }}>
           <Table.Root>
@@ -1067,7 +1030,7 @@ function PODetailContent() {
                             fontSize: "11px",
                           }}
                         >
-                          + Record
+                          + Receive
                         </Button>
                       )}
                     </Flex>
@@ -1096,24 +1059,6 @@ function PODetailContent() {
                   </Table.Cell>
                   <Table.Cell>
                     <Flex gap="2">
-                      <Button
-                        size="1"
-                        variant="ghost"
-                        onClick={() => handleLoadFulfillmentData(line.id)}
-                        disabled={loadingFulfillmentLines.has(line.id)}
-                        style={{ 
-                          color: loadingFulfillmentLines.has(line.id) 
-                            ? "var(--color-text-secondary)" 
-                            : "var(--color-primary)" 
-                        }}
-                        title="Load fulfillment data"
-                      >
-                        {loadingFulfillmentLines.has(line.id) ? (
-                          <FiClock size={16} />
-                        ) : (
-                          <FiPackage size={16} />
-                        )}
-                      </Button>
                       <Button
                         size="1"
                         variant="ghost"
@@ -1278,9 +1223,9 @@ function PODetailContent() {
       {/* Delivery Dialog */}
       <Dialog.Root open={deliveryDialogOpen} onOpenChange={setDeliveryDialogOpen}>
         <Dialog.Content style={{ maxWidth: 500 }}>
-          <Dialog.Title>Record Delivery</Dialog.Title>
+          <Dialog.Title>Record Received Quantity</Dialog.Title>
           <Dialog.Description size="2" mb="4" style={{ color: "var(--color-text-secondary)" }}>
-            Record a delivery event for this line item.
+            Record how many units the vendor delivered to DPM for this PO line.
           </Dialog.Description>
 
           {selectedLineItem && (
@@ -1290,7 +1235,7 @@ function PODetailContent() {
                   SKU: {selectedLineItem.skuCode} - {selectedLineItem.skuName}
                 </Text>
                 <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
-                  Quantity: {selectedLineItem.quantity} | Remaining: {selectedLineItem.remainingQty}
+                  Ordered: {selectedLineItem.quantity} | Remaining: {selectedLineItem.remainingQty}
                 </Text>
               </Box>
 
@@ -1303,7 +1248,7 @@ function PODetailContent() {
                   htmlFor="deliveryQuantity"
                   style={{ color: "var(--color-text-primary)" }}
                 >
-                  Delivery Quantity *
+                  Received Quantity *
                 </Text>
                 <TextField.Root
                   id="deliveryQuantity"
@@ -1321,31 +1266,6 @@ function PODetailContent() {
                 />
               </Box>
 
-              <Box>
-                <Text
-                  size="2"
-                  weight="medium"
-                  mb="2"
-                  as="label"
-                  htmlFor="deliveryNotes"
-                  style={{ color: "var(--color-text-primary)" }}
-                >
-                  Notes (Optional)
-                </Text>
-                <TextField.Root
-                  id="deliveryNotes"
-                  value={deliveryNotes}
-                  onChange={(e) => setDeliveryNotes(e.target.value)}
-                  placeholder="Add any notes about this delivery..."
-                  size="3"
-                  style={{
-                    background: "var(--color-dark-bg-secondary)",
-                    border: "1px solid var(--color-dark-bg-tertiary)",
-                    color: "var(--color-text-primary)",
-                    minHeight: "80px",
-                  }}
-                />
-              </Box>
             </Flex>
           )}
 
@@ -1369,7 +1289,7 @@ function PODetailContent() {
                 fontWeight: "600",
               }}
             >
-              {isSaving ? "Recording..." : "Record Delivery"}
+              {isSaving ? "Recording..." : "Record Received Qty"}
             </Button>
           </Flex>
         </Dialog.Content>
