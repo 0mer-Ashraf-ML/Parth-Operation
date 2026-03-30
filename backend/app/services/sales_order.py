@@ -13,6 +13,7 @@ Key business rules:
   • Order-level due_date has been removed.  Due dates live on SO lines only.
 """
 
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -154,13 +155,14 @@ def create_sales_order(
                 f"does not belong to client id={data.client_id}"
             )
 
-    # 4. Build SO header (no order-level due_date)
+    # 4. Build SO header (order_date defaults to today when not supplied, e.g. manual create)
+    resolved_order_date = data.order_date if data.order_date is not None else date.today()
     so = SalesOrder(
         order_number=data.order_number,
         client_id=data.client_id,
         ship_to_address_id=data.ship_to_address_id,
         ship_to_contact_name=data.ship_to_contact_name,
-        order_date=data.order_date,
+        order_date=resolved_order_date,
         original_pdf_url=data.original_pdf_url,
         notes=data.notes,
         status=SOStatus.PENDING,

@@ -99,7 +99,9 @@ class SOCreate(BaseModel):
         description="Delivery contact name (e.g. from customer PO / PDF parse)",
     )
     order_date: Optional[date] = Field(
-        None, description="Date the customer placed the order (from their PO)",
+        None,
+        description="Date the customer placed the order (from their PO). "
+        "If omitted, defaults to today's date on the server.",
     )
     # NOTE: order-level due_date removed – use per-line due dates instead
     original_pdf_url: Optional[str] = Field(None, max_length=500)
