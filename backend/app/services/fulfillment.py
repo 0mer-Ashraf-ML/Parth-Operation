@@ -22,6 +22,8 @@ Key business rules:
       • Drop-ship POs NEVER affect inventory (goods ship vendor → customer).
 """
 
+import datetime as _dt
+
 from sqlalchemy import func as sa_func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -118,6 +120,7 @@ def record_fulfillment_event(
         prev_status=prev_status,
         prev_delivered=prev_delivered,
     )
+    sync_po_line_lifecycle_timestamps(po_line)
 
     # 6. Auto-derive PO header and SO status
     db.flush()
@@ -333,6 +336,32 @@ def sync_po_line_status_from_delivered_qty(
         line.status = new_status
 
 
+def sync_po_line_lifecycle_timestamps(line: POLine) -> None:
+    """
+    Populate actual lifecycle timestamps from the current PO line status.
+
+    Drop-ship:
+      • DELIVERED -> delivered_at
+
+    In-house:
+      • READY_FOR_PICKUP -> received_at
+      • DELIVERED        -> delivered_at
+    """
+    po = line.purchase_order
+    shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
+    now = _utcnow()
+
+    if shipment == ShipmentType.IN_HOUSE and line.status == POLineStatus.READY_FOR_PICKUP:
+        if line.received_at is None:
+            line.received_at = now
+
+    if line.status == POLineStatus.DELIVERED:
+        if shipment == ShipmentType.IN_HOUSE and line.received_at is None:
+            line.received_at = now
+        if line.delivered_at is None:
+            line.delivered_at = now
+
+
 def _get_po_line_or_404(db: Session, po_line_id: int) -> POLine:
     """Load a PO line with its parent PO."""
     po_line = db.execute(
@@ -421,6 +450,10 @@ def _adjust_inventory(db: Session, sku_id: int, qty_delta: int) -> None:
         return  # nothing to adjust
 
     sku.inventory_count = sku.inventory_count + qty_delta
+
+
+def _utcnow():
+    return _dt.datetime.now(_dt.timezone.utc)
 
 
 def _build_overview(po: PurchaseOrder) -> dict:

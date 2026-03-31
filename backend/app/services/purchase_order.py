@@ -38,6 +38,7 @@ from app.services.permissions import PermissionService
 from app.services.fulfillment import (
     _adjust_inventory,
     sum_fulfillment_qty_for_line,
+    sync_po_line_lifecycle_timestamps,
     sync_po_line_status_from_delivered_qty,
 )
 
@@ -77,6 +78,7 @@ def derive_and_persist_po_status(db: Session, po: PurchaseOrder) -> bool:
     new_status = derive_po_status(po)
     if new_status != po.status:
         po.status = new_status
+        po.completed_at = _utcnow() if new_status == POStatus.COMPLETED else None
         return True
     return False
 
@@ -389,6 +391,7 @@ def update_purchase_order(
 
                 line.delivered_qty = line.quantity
                 line.status = POLineStatus.DELIVERED
+                sync_po_line_lifecycle_timestamps(line)
             db.flush()
             derive_and_persist_po_status(db, po)
             derive_and_persist_so_status(db, po.sales_order_id)
@@ -502,6 +505,7 @@ def update_po_line(
                 prev_status=old_st,
                 prev_delivered=old_d,
             )
+            sync_po_line_lifecycle_timestamps(line)
 
     # ── Per-line status transition ────────────────────────
     if "status" in kwargs and kwargs["status"] is not None:
@@ -545,6 +549,7 @@ def update_po_line(
                 line.delivered_qty = line.quantity
 
             line.status = new_status
+            sync_po_line_lifecycle_timestamps(line)
 
     if "due_date" in kwargs:
         line.due_date = kwargs["due_date"]
@@ -679,6 +684,10 @@ def _validate_line_status_transition(
             f"'{current_status.value}' -> '{new_status.value}'. "
             f"Valid next: [{valid_str}]"
         )
+
+
+def _utcnow():
+    return _dt.datetime.now(_dt.timezone.utc)
 
 
 def _assert_can_access_po(
