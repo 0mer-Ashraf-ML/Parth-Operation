@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ═══════════════════════════════════════════════════════════
@@ -24,11 +24,27 @@ class TierPricingCreate(BaseModel):
     max_qty: Optional[int] = Field(None, ge=1, examples=[999], description="NULL = unlimited (highest tier)")
     unit_price: Decimal = Field(..., ge=0, decimal_places=2, examples=[Decimal("2.50")])
 
+    @model_validator(mode="after")
+    def max_not_less_than_min(self):
+        if self.max_qty is not None and self.max_qty < self.min_qty:
+            raise ValueError("max_qty cannot be less than min_qty")
+        return self
+
 
 class TierPricingUpdate(BaseModel):
     min_qty: Optional[int] = Field(None, ge=1)
     max_qty: Optional[int] = Field(None, ge=1)
     unit_price: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
+
+    @model_validator(mode="after")
+    def max_not_less_than_min(self):
+        if (
+            self.min_qty is not None
+            and self.max_qty is not None
+            and self.max_qty < self.min_qty
+        ):
+            raise ValueError("max_qty cannot be less than min_qty")
+        return self
 
 
 class TierPricingOut(BaseModel):
@@ -94,6 +110,16 @@ class SKUCreate(BaseModel):
     # Nested – create tier prices together with the SKU
     tier_prices: list[TierPricingCreate] = []
 
+    @model_validator(mode="after")
+    def vendor_ids_must_differ(self):
+        if (
+            self.default_vendor_id is not None
+            and self.secondary_vendor_id is not None
+            and self.default_vendor_id == self.secondary_vendor_id
+        ):
+            raise ValueError("secondary_vendor_id cannot be the same as default_vendor_id")
+        return self
+
 
 class SKUUpdate(BaseModel):
     """PATCH /skus/{id} body."""
@@ -105,6 +131,16 @@ class SKUUpdate(BaseModel):
     track_inventory: Optional[bool] = None
     inventory_count: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def vendor_ids_must_differ(self):
+        if (
+            self.default_vendor_id is not None
+            and self.secondary_vendor_id is not None
+            and self.default_vendor_id == self.secondary_vendor_id
+        ):
+            raise ValueError("secondary_vendor_id cannot be the same as default_vendor_id")
+        return self
 
 
 class SKUListOut(BaseModel):

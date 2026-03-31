@@ -2,9 +2,10 @@
 Pydantic schemas for authentication endpoints.
 """
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import UserRole
+from app.validation import validate_email_like
 
 
 # ── Request schemas ────────────────────────────────────────
@@ -13,6 +14,11 @@ class LoginRequest(BaseModel):
     """POST /auth/login body."""
     email: str = Field(..., examples=["admin@dpm.com"])
     password: str = Field(..., min_length=1, examples=["admin123"])
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: str) -> str:
+        return validate_email_like(v)
 
 
 # ── Response schemas ───────────────────────────────────────

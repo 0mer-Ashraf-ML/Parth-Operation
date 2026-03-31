@@ -5,7 +5,9 @@ Pydantic schemas for Vendor and VendorAddress endpoints.
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.validation import validate_optional_email_like
 
 
 # ═══════════════════════════════════════════════════════════
@@ -68,6 +70,11 @@ class VendorCreate(BaseModel):
     # Nested – create addresses together with the vendor
     addresses: list[VendorAddressCreate] = []
 
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        return validate_optional_email_like(v)
+
 
 class VendorUpdate(BaseModel):
     """PATCH /vendors/{id} body."""
@@ -77,6 +84,11 @@ class VendorUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=50)
     lead_time_weeks: Optional[int] = Field(None, ge=0, le=104)
     is_active: Optional[bool] = None
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        return validate_optional_email_like(v)
 
 
 class VendorListOut(BaseModel):

@@ -11,9 +11,10 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import AddressType, ContactType
+from app.validation import validate_optional_email_like, validate_payment_terms
 
 
 # ═══════════════════════════════════════════════════════════
@@ -26,12 +27,22 @@ class ClientContactCreate(BaseModel):
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
 
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        return validate_optional_email_like(v)
+
 
 class ClientContactUpdate(BaseModel):
     contact_type: Optional[ContactType] = None
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: Optional[str]) -> Optional[str]:
+        return validate_optional_email_like(v)
 
 
 class ClientContactOut(BaseModel):
@@ -108,6 +119,11 @@ class ClientCreate(BaseModel):
     contacts: list[ClientContactCreate] = []
     addresses: list[ClientAddressCreate] = []
 
+    @field_validator("payment_terms")
+    @classmethod
+    def payment_terms_allowed(cls, v: int) -> int:
+        return validate_payment_terms(v)
+
 
 class ClientUpdate(BaseModel):
     """PATCH /clients/{id} body.  Only include fields you want to change."""
@@ -122,6 +138,13 @@ class ClientUpdate(BaseModel):
         None,
         description="Canonical invoice billing address (must be a BILLING address on this client)",
     )
+
+    @field_validator("payment_terms")
+    @classmethod
+    def payment_terms_allowed(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        return validate_payment_terms(v)
 
 
 class ClientListOut(BaseModel):
