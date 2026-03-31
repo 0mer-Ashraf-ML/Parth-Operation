@@ -10,6 +10,11 @@ from app.models.enums import UserRole
 from app.password_policy import validate_new_password
 
 
+class UserAssignedClientOut(BaseModel):
+    id: int
+    company_name: str
+
+
 class UserOut(BaseModel):
     """User row for API responses (excludes password_hash)."""
 
@@ -19,6 +24,8 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     vendor_id: int | None = None
+    assigned_client_ids: list[int] = []
+    assigned_clients: list[UserAssignedClientOut] = []
     created_at: datetime
     updated_at: datetime
 

@@ -12,6 +12,7 @@ from app.database import get_db
 from app.dependencies import require_admin
 from app.schemas.auth import CurrentUser
 from app.schemas.user import (
+    UserAssignedClientOut,
     UserClientAssignmentCreate,
     UserClientAssignmentOut,
     UserCreate,
@@ -36,7 +37,7 @@ def list_users(
     users = user_svc.list_users(db)
     return {
         "success": True,
-        "data": [UserOut.model_validate(u) for u in users],
+        "data": [_user_to_out(u) for u in users],
     }
 
 
@@ -50,7 +51,7 @@ def get_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.get_user(db, user_id)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    return {"success": True, "data": _user_to_out(user)}
 
 
 @router.post(
@@ -64,7 +65,8 @@ def create_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.create_user(db, body)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    user = user_svc.get_user(db, user.id)
+    return {"success": True, "data": _user_to_out(user)}
 
 
 @router.patch(
@@ -78,7 +80,8 @@ def update_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.update_user(db, user_id, body)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    user = user_svc.get_user(db, user.id)
+    return {"success": True, "data": _user_to_out(user)}
 
 
 @router.patch(
@@ -92,7 +95,8 @@ def set_user_role(
     db: Session = Depends(get_db),
 ):
     user = user_svc.set_user_role(db, user_id, body, current_user)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    user = user_svc.get_user(db, user.id)
+    return {"success": True, "data": _user_to_out(user)}
 
 
 @router.delete(
@@ -165,3 +169,25 @@ def remove_client_assignment(
 ):
     user_svc.remove_client_assignment(db, user_id, client_id)
     return {"success": True, "data": {"message": "Client assignment removed"}}
+
+
+def _user_to_out(user) -> UserOut:
+    assigned_clients = [
+        UserAssignedClientOut(
+            id=assignment.client_id,
+            company_name=assignment.client.company_name if assignment.client else "",
+        )
+        for assignment in (user.assigned_clients or [])
+    ]
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        vendor_id=user.vendor_id,
+        assigned_client_ids=[client.id for client in assigned_clients],
+        assigned_clients=assigned_clients,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )

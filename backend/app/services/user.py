@@ -18,14 +18,22 @@ from app.services.auth import hash_password
 
 
 def get_user(db: Session, user_id: int) -> User:
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    user = db.execute(
+        select(User)
+        .options(selectinload(User.assigned_clients).selectinload(ClientAssignment.client))
+        .where(User.id == user_id)
+    ).scalar_one_or_none()
     if user is None:
         raise NotFoundException(f"User with id={user_id} not found")
     return user
 
 
 def list_users(db: Session) -> list[User]:
-    stmt = select(User).order_by(User.id.asc())
+    stmt = (
+        select(User)
+        .options(selectinload(User.assigned_clients).selectinload(ClientAssignment.client))
+        .order_by(User.id.asc())
+    )
     return list(db.execute(stmt).scalars().all())
 
 
