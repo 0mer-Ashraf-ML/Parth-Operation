@@ -25,6 +25,7 @@ from app.schemas.auth import (
     UserBrief,
 )
 from app.services.auth import create_access_token, verify_password
+from app.validation import normalize_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -96,7 +97,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     """
     # 1. Look up user by email
     user = db.execute(
-        select(User).where(User.email == body.email)
+        select(User).where(User.email == normalize_email(body.email))
     ).scalar_one_or_none()
 
     if user is None:

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import UserRole
 from app.password_policy import validate_new_password
+from app.validation import validate_email_like
 
 
 class UserOut(BaseModel):
@@ -37,6 +38,11 @@ class UserCreate(BaseModel):
     def password_strength(cls, v: str) -> str:
         return validate_new_password(v)
 
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: str) -> str:
+        return validate_email_like(v)
+
     @model_validator(mode="after")
     def vendor_required_when_vendor_role(self):
         # Non-vendor roles never store vendor_id; ignore stray values (e.g. 0 from form defaults).
@@ -61,6 +67,13 @@ class UserUpdate(BaseModel):
         if v is None:
             return v
         return validate_new_password(v)
+
+    @field_validator("email")
+    @classmethod
+    def email_format(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return validate_email_like(v)
 
 
 class UserRoleUpdate(BaseModel):

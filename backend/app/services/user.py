@@ -14,6 +14,7 @@ from app.models.vendor import Vendor
 from app.schemas.auth import CurrentUser
 from app.schemas.user import UserCreate, UserRoleUpdate, UserUpdate
 from app.services.auth import hash_password
+from app.validation import normalize_email
 
 
 def get_user(db: Session, user_id: int) -> User:
@@ -29,7 +30,8 @@ def list_users(db: Session) -> list[User]:
 
 
 def _email_taken(db: Session, email: str, exclude_user_id: int | None = None) -> bool:
-    q = select(User.id).where(User.email == email)
+    normalized_email = normalize_email(email)
+    q = select(User.id).where(User.email == normalized_email)
     if exclude_user_id is not None:
         q = q.where(User.id != exclude_user_id)
     return db.execute(q).scalar_one_or_none() is not None
@@ -71,7 +73,7 @@ def create_user(db: Session, data: UserCreate) -> User:
         vendor_id = data.vendor_id
 
     user = User(
-        email=data.email,
+        email=normalize_email(data.email),
         password_hash=hash_password(data.password),
         full_name=data.full_name,
         role=data.role,
@@ -91,7 +93,7 @@ def update_user(db: Session, user_id: int, data: UserUpdate) -> User:
     if "email" in payload:
         if _email_taken(db, payload["email"], exclude_user_id=user.id):
             raise ConflictException(f"A user with email '{payload['email']}' already exists")
-        user.email = payload["email"]
+        user.email = normalize_email(payload["email"])
 
     if "full_name" in payload:
         user.full_name = payload["full_name"]
