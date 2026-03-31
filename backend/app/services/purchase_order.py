@@ -17,7 +17,7 @@ Key business rules:
 
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions import (
@@ -37,9 +37,89 @@ from app.services.permissions import PermissionService
 # ── Inventory + line sync (shared with fulfillment service) ────
 from app.services.fulfillment import (
     _adjust_inventory,
+    fix_fully_received_po_line_status,
     sum_fulfillment_qty_for_line,
     sync_po_line_status_from_delivered_qty,
 )
+
+
+def _po_shipment_is_in_house(po: PurchaseOrder) -> bool:
+    st = po.shipment_type
+    if isinstance(st, ShipmentType):
+        return st == ShipmentType.IN_HOUSE
+    return str(st).strip().lower().replace("-", "_") == ShipmentType.IN_HOUSE.value
+
+
+def reconcile_fully_received_po_line_statuses(db: Session, po: PurchaseOrder) -> None:
+    """Align line status when delivered_qty >= quantity (in-house vs drop-ship)."""
+    bind = db.get_bind()
+    po_id = po.id
+    print(f"po_id: {po_id}")
+
+    # PostgreSQL: use explicit ::po_line_status casts. Core update().values(status=...)
+    # can bind str-Enum *values* (e.g. ready_for_pickup) while the DB type labels are
+    # IN_PRODUCTION-style (from Alembic), so the ORM UPDATE may error or match zero rows.
+    if bind.dialect.name == "postgresql":
+        if _po_shipment_is_in_house(po):
+            db.execute(
+                text(
+                    """
+                    UPDATE po_lines
+                    SET status = 'READY_FOR_PICKUP'::po_line_status
+                    WHERE purchase_order_id = :po_id
+                      AND quantity > 0
+                      AND delivered_qty >= quantity
+                      AND status NOT IN (
+                        'DELIVERED'::po_line_status,
+                        'READY_FOR_PICKUP'::po_line_status
+                      )
+                    """
+                ),
+                {"po_id": po_id},
+            )
+        else:
+            db.execute(
+                text(
+                    """
+                    UPDATE po_lines
+                    SET status = 'DELIVERED'::po_line_status
+                    WHERE purchase_order_id = :po_id
+                      AND quantity > 0
+                      AND delivered_qty >= quantity
+                      AND status IS DISTINCT FROM 'DELIVERED'::po_line_status
+                    """
+                ),
+                {"po_id": po_id},
+            )
+    elif _po_shipment_is_in_house(po):
+        stmt = (
+            update(POLine)
+            .where(
+                POLine.purchase_order_id == po_id,
+                POLine.quantity > 0,
+                POLine.delivered_qty >= POLine.quantity,
+                ~POLine.status.in_(
+                    [POLineStatus.DELIVERED, POLineStatus.READY_FOR_PICKUP],
+                ),
+            )
+            .values(status=POLineStatus.READY_FOR_PICKUP)
+        )
+        db.execute(stmt)
+    else:
+        stmt = (
+            update(POLine)
+            .where(
+                POLine.purchase_order_id == po_id,
+                POLine.quantity > 0,
+                POLine.delivered_qty >= POLine.quantity,
+                POLine.status != POLineStatus.DELIVERED,
+            )
+            .values(status=POLineStatus.DELIVERED)
+        )
+        db.execute(stmt)
+
+    db.commit()
+    db.expire_all()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -320,13 +400,8 @@ def list_purchase_orders(
     return list(db.execute(query).scalars().unique().all())
 
 
-def get_purchase_order(
-    db: Session,
-    current_user: CurrentUser,
-    po_id: int,
-) -> PurchaseOrder:
-    """Fetch a single PO with lines + relationships. Permission-checked."""
-    po = db.execute(
+def _select_po_detail(po_id: int):
+    return (
         select(PurchaseOrder)
         .options(
             selectinload(PurchaseOrder.vendor),
@@ -337,12 +412,25 @@ def get_purchase_order(
             selectinload(PurchaseOrder.lines).selectinload(POLine.sku),
         )
         .where(PurchaseOrder.id == po_id)
-    ).scalar_one_or_none()
+    )
+
+
+def get_purchase_order(
+    db: Session,
+    current_user: CurrentUser,
+    po_id: int,
+) -> PurchaseOrder:
+    """Fetch a single PO with lines + relationships. Permission-checked."""
+    po = db.execute(_select_po_detail(po_id)).scalar_one_or_none()
 
     if po is None:
         raise NotFoundException(f"Purchase Order with id={po_id} not found")
 
     _assert_can_access_po(current_user, po)
+    reconcile_fully_received_po_line_statuses(db, po)
+    po = db.execute(
+        _select_po_detail(po_id).execution_options(populate_existing=True),
+    ).scalar_one()
     return po
 
 
@@ -463,6 +551,8 @@ def update_po_line(
             f"PO Line id={line_id} not found on PO {po.po_number}"
         )
 
+    line.purchase_order = po
+
     # ── Per-line delivered quantity (vendor / admin) ──────
     if "delivered_qty" in kwargs and kwargs["delivered_qty"] is not None:
         new_d = kwargs["delivered_qty"]
@@ -481,18 +571,16 @@ def update_po_line(
         old_st = line.status
         old_d = line.delivered_qty
         delta = new_d - old_d
-        if delta:
-            # In-house only: PO line delivered_qty represents goods received
-            # into DPM's warehouse from the vendor.
-            if po.shipment_type == ShipmentType.IN_HOUSE:
-                _adjust_inventory(db, line.sku_id, delta)
-            line.delivered_qty = new_d
-            sync_po_line_status_from_delivered_qty(
-                db,
-                line,
-                prev_status=old_st,
-                prev_delivered=old_d,
-            )
+        if delta and po.shipment_type == ShipmentType.IN_HOUSE:
+            _adjust_inventory(db, line.sku_id, delta)
+        line.delivered_qty = new_d
+        sync_po_line_status_from_delivered_qty(
+            db,
+            line,
+            prev_status=old_st,
+            prev_delivered=old_d,
+            shipment_type=po.shipment_type,
+        )
 
     # ── Per-line status transition ────────────────────────
     if "status" in kwargs and kwargs["status"] is not None:
@@ -533,8 +621,9 @@ def update_po_line(
     if "expected_arrival_date" in kwargs:
         line.expected_arrival_date = kwargs["expected_arrival_date"]
 
+    fix_fully_received_po_line_status(line, po.shipment_type)
+
     # ── Auto-derive PO header status ──────────────────────
-    # Reload PO lines to get fresh state
     db.flush()
     po = db.execute(
         select(PurchaseOrder)
