@@ -118,6 +118,10 @@ class POUpdate(BaseModel):
         None,
         description="When goods are expected to arrive",
     )
+    reopen: Optional[bool] = Field(
+        None,
+        description="Reopen a completed PO and restore line/header state from actual progress",
+    )
 
     @field_validator("status")
     @classmethod
