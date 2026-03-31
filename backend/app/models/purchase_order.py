@@ -142,8 +142,16 @@ class POLine(Base):
     )
 
     # ── Per-line status (each line tracks independently) ──
+    # Persist enum member names (e.g. PACKED_AND_SHIPPED) to match PostgreSQL
+    # type po_line_status from Alembic — str-backed Enum would otherwise send .value
+    # (packed_and_shipped), which does not match those labels.
     status: Mapped[POLineStatus] = mapped_column(
-        SAEnum(POLineStatus, name="po_line_status", create_constraint=True),
+        SAEnum(
+            POLineStatus,
+            name="po_line_status",
+            create_constraint=True,
+            values_callable=lambda x: [e.name for e in x],
+        ),
         nullable=False,
         default=POLineStatus.IN_PRODUCTION,
         comment="Per-line delivery status – each line tracks independently",

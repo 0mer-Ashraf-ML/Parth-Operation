@@ -20,7 +20,7 @@ Key business rules:
 """
 
 from sqlalchemy import func as sa_func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, attributes, selectinload
 
 from app.exceptions import (
     BadRequestException,
@@ -109,7 +109,9 @@ def record_fulfillment_event(
         po_line,
         prev_status=prev_status,
         prev_delivered=prev_delivered,
+        shipment_type=po_line.purchase_order.shipment_type,
     )
+    fix_fully_received_po_line_status(po_line, po_line.purchase_order.shipment_type)
 
     # 6. Auto-derive PO header and SO status
     db.flush()
@@ -283,6 +285,7 @@ def sync_po_line_status_from_delivered_qty(
     *,
     prev_status: POLineStatus,
     prev_delivered: int,
+    shipment_type: ShipmentType | None = None,
 ) -> None:
     """
     Derive PO line status from delivered_qty vs quantity.
@@ -293,9 +296,12 @@ def sync_po_line_status_from_delivered_qty(
       • delivered_qty >= quantity      → DELIVERED
 
     In-house:
-      Never downgrade from READY_FOR_PICKUP or DELIVERED — those are
-      manual status transitions.  For earlier statuses, same rules as
-      drop-ship (but caps at PACKED_AND_SHIPPED, not auto-DELIVERED).
+      • delivered_qty <= 0            → IN_PRODUCTION
+      • 0 < delivered_qty < quantity  → PACKED_AND_SHIPPED
+      • delivered_qty >= quantity     → READY_FOR_PICKUP (goods received;
+        DELIVERED is set manually, typically by an admin after pickup)
+
+      Never downgrade from READY_FOR_PICKUP or DELIVERED via this sync.
 
     No inventory changes here — inventory is handled by
     PO-side received quantity updates.
@@ -303,10 +309,16 @@ def sync_po_line_status_from_delivered_qty(
     if line.quantity <= 0:
         return
 
-    po = line.purchase_order
-    shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
+    if shipment_type is not None:
+        shipment = shipment_type
+    else:
+        po = line.purchase_order
+        shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
 
-    if shipment == ShipmentType.IN_HOUSE:
+    in_house = _shipment_type_is_in_house(shipment)
+    print(f"in_house: {in_house}")
+
+    if in_house:
         if prev_status in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
             return
 
@@ -315,13 +327,62 @@ def sync_po_line_status_from_delivered_qty(
         new_status = POLineStatus.IN_PRODUCTION
     elif d < q:
         new_status = POLineStatus.PACKED_AND_SHIPPED
-    elif shipment == ShipmentType.IN_HOUSE:
-        new_status = POLineStatus.PACKED_AND_SHIPPED
+    elif in_house:
+        new_status = POLineStatus.READY_FOR_PICKUP
     else:
         new_status = POLineStatus.DELIVERED
 
     if line.status != new_status:
         line.status = new_status
+        # Native PG enums + str Enum can skip emitting status on flush unless forced
+        attributes.flag_modified(line, "status")
+
+
+def _shipment_type_is_in_house(shipment_type: ShipmentType | str | None) -> bool:
+    """True if PO shipment type is in-house (handles Enum or string from API/ORM)."""
+    if shipment_type is None:
+        return False
+    if isinstance(shipment_type, ShipmentType):
+        return shipment_type == ShipmentType.IN_HOUSE
+    s = str(shipment_type).strip().lower().replace("-", "_")
+    return s == ShipmentType.IN_HOUSE.value
+
+
+def fix_fully_received_po_line_status(
+    line: POLine,
+    shipment_type: ShipmentType | str | None,
+) -> bool:
+    """
+    When delivered_qty >= quantity, persist the correct terminal status for the flow:
+
+    • In-house  → READY_FOR_PICKUP (admin sets DELIVERED after pickup)
+    • Drop-ship → DELIVERED
+
+    Fixes rows stuck at PACKED_AND_SHIPPED. Uses flag_modified so PostgreSQL
+    enum columns reliably emit UPDATEs.
+
+    Returns True if the ORM object was changed.
+    """
+    if line.quantity <= 0 or line.delivered_qty < line.quantity:
+        return False
+
+    in_house = _shipment_type_is_in_house(shipment_type)
+    if in_house:
+        if line.status == POLineStatus.DELIVERED:
+            return False
+        target = POLineStatus.READY_FOR_PICKUP
+    else:
+        target = POLineStatus.DELIVERED
+
+    if line.status != target:
+        line.status = target
+        attributes.flag_modified(line, "status")
+        return True
+
+    # Sync may have already set status to target in Python without marking the column
+    # dirty, so commit would persist delivered_qty but not status — force an UPDATE.
+    attributes.flag_modified(line, "status")
+    return True
 
 
 def _get_po_line_or_404(db: Session, po_line_id: int) -> POLine:
