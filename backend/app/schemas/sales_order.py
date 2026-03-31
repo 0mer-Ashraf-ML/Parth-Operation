@@ -144,6 +144,10 @@ class SODetailOut(BaseModel):
     order_number: str
     client_id: int
     client_name: Optional[str] = None
+    po_created: bool = Field(
+        False,
+        description="True if at least one Purchase Order exists for this Sales Order",
+    )
     ship_to_address_id: Optional[int] = None
     ship_to_address: Optional[ClientAddressOut] = None
     ship_to_contact_name: Optional[str] = None
