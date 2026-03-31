@@ -5,9 +5,10 @@ Admins cannot change their own role or vendor assignment via set_user_role.
 """
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
+from app.models.client import Client
 from app.models.enums import UserRole
 from app.models.user import ClientAssignment, User
 from app.models.vendor import Vendor
@@ -117,6 +118,66 @@ def update_user(db: Session, user_id: int, data: UserUpdate) -> User:
 
 def _clear_client_assignments(db: Session, user_id: int) -> None:
     db.execute(delete(ClientAssignment).where(ClientAssignment.user_id == user_id))
+
+
+def list_client_assignments(db: Session, user_id: int) -> list[ClientAssignment]:
+    user = db.execute(
+        select(User)
+        .options(selectinload(User.assigned_clients).selectinload(ClientAssignment.client))
+        .where(User.id == user_id)
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFoundException(f"User with id={user_id} not found")
+    if user.role != UserRole.ACCOUNT_MANAGER:
+        return []
+    return list(user.assigned_clients)
+
+
+def assign_client(db: Session, user_id: int, client_id: int) -> ClientAssignment:
+    user = get_user(db, user_id)
+    if user.role != UserRole.ACCOUNT_MANAGER:
+        raise BadRequestException("Clients can only be assigned to account manager users")
+
+    client = db.execute(
+        select(Client).where(Client.id == client_id)
+    ).scalar_one_or_none()
+    if client is None:
+        raise BadRequestException(f"Client with id={client_id} does not exist")
+    if not client.is_active:
+        raise BadRequestException(f"Client '{client.company_name}' is inactive and cannot be assigned")
+
+    existing = db.execute(
+        select(ClientAssignment).where(
+            ClientAssignment.user_id == user_id,
+            ClientAssignment.client_id == client_id,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise ConflictException("This client is already assigned to the user")
+
+    assignment = ClientAssignment(user_id=user_id, client_id=client_id)
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+    return db.execute(
+        select(ClientAssignment)
+        .options(selectinload(ClientAssignment.client))
+        .where(ClientAssignment.id == assignment.id)
+    ).scalar_one()
+
+
+def remove_client_assignment(db: Session, user_id: int, client_id: int) -> None:
+    assignment = db.execute(
+        select(ClientAssignment).where(
+            ClientAssignment.user_id == user_id,
+            ClientAssignment.client_id == client_id,
+        )
+    ).scalar_one_or_none()
+    if assignment is None:
+        raise NotFoundException("Client assignment not found")
+
+    db.delete(assignment)
+    db.commit()
 
 
 def set_user_role(db: Session, user_id: int, data: UserRoleUpdate, actor: CurrentUser) -> User:

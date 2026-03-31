@@ -74,3 +74,13 @@ class UserRoleUpdate(BaseModel):
         if self.vendor_id is None:
             raise ValueError("vendor_id is required when role is vendor")
         return self
+
+
+class UserClientAssignmentCreate(BaseModel):
+    client_id: int
+
+
+class UserClientAssignmentOut(BaseModel):
+    client_id: int
+    client_name: str
+    assigned_at: datetime
