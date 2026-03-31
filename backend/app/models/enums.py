@@ -112,3 +112,18 @@ class EventSource(str, enum.Enum):
     UI = "ui"
     AI = "ai"
     SYSTEM = "system"
+
+
+class MessageRole(str, enum.Enum):
+    """Role of the message creator in an AI chat conversation."""
+    USER = "user"
+    MODEL = "model"
+    SYSTEM = "system"
+    TOOL = "tool"
+
+
+class ChatEntityType(str, enum.Enum):
+    """Type of business entity a chat thread is linked to."""
+    SALES_ORDER = "sales_order"
+    PURCHASE_ORDER = "purchase_order"
+    CLIENT = "client"
