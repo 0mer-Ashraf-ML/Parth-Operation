@@ -45,7 +45,7 @@ router = APIRouter(prefix="/skus", tags=["SKUs"])
     summary="List SKUs",
 )
 def list_skus(
-    is_active: bool | None = Query(True, description="Filter by active status"),
+    is_active: bool | None = Query(None, description="Filter by active status"),
     search: str | None = Query(None, description="Search by SKU code or name"),
     vendor_id: int | None = Query(None, description="Filter by default vendor"),
     current_user: CurrentUser = Depends(require_any_role),

@@ -44,7 +44,7 @@ router = APIRouter(prefix="/vendors", tags=["Vendors"])
     summary="List vendors",
 )
 def list_vendors(
-    is_active: bool | None = Query(True, description="Filter by active status"),
+    is_active: bool | None = Query(None, description="Filter by active status"),
     search: str | None = Query(None, description="Search by company name"),
     current_user: CurrentUser = Depends(require_any_role),
     db: Session = Depends(get_db),
