@@ -361,8 +361,15 @@ def update_purchase_order(
     • expected_ship_date / expected_arrival_date – free update.
     • status=COMPLETED  – marks the PO complete: every line gets delivered_qty
       set to full quantity, status DELIVERED, remaining 0 (inventory adjusted).
+    • reopen=True       – reopens a completed PO from actual fulfillment state.
     """
     po = get_purchase_order(db, current_user, po_id)
+
+    if kwargs.get("reopen"):
+        _reopen_purchase_order(db, po)
+        db.commit()
+        db.refresh(po)
+        return po
 
     # ── Mark PO complete (all lines delivered) ───────────────
     if kwargs.get("status") is not None:
@@ -598,6 +605,57 @@ def delete_purchase_order(
     derive_and_persist_so_status(db, so_id)
 
     db.commit()
+
+
+def _reopen_purchase_order(db: Session, po: PurchaseOrder) -> None:
+    """
+    Reopen a completed PO by restoring each line from actual recorded progress.
+
+    Because the system does not yet persist a full pre-completion snapshot,
+    reopen is derived from durable state:
+      • fulfillment events -> actual delivered quantity
+      • received_at        -> whether an in-house line had reached warehouse receipt
+    """
+    if po.status != POStatus.COMPLETED:
+        raise BadRequestException("Only completed purchase orders can be reopened")
+
+    po = db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.lines))
+        .where(PurchaseOrder.id == po.id)
+    ).scalar_one()
+
+    for line in po.lines or []:
+        actual_delivered = sum_fulfillment_qty_for_line(db, line.id)
+        line.delivered_qty = actual_delivered
+
+        if po.shipment_type == ShipmentType.DROP_SHIP:
+            if actual_delivered >= line.quantity and line.quantity > 0:
+                line.status = POLineStatus.DELIVERED
+            elif actual_delivered > 0:
+                line.status = POLineStatus.PACKED_AND_SHIPPED
+            else:
+                line.status = POLineStatus.IN_PRODUCTION
+        else:
+            if actual_delivered >= line.quantity and line.quantity > 0:
+                line.status = POLineStatus.DELIVERED
+            elif line.received_at is not None:
+                line.status = POLineStatus.READY_FOR_PICKUP
+            elif actual_delivered > 0:
+                line.status = POLineStatus.PACKED_AND_SHIPPED
+            else:
+                line.status = POLineStatus.IN_PRODUCTION
+
+        if line.status != POLineStatus.DELIVERED:
+            line.delivered_at = None
+        if line.status not in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
+            line.received_at = None
+
+        sync_po_line_lifecycle_timestamps(line)
+
+    po.status = POStatus.STARTED
+    po.completed_at = None
+    derive_and_persist_so_status(db, po.sales_order_id)
 
 
 # ═══════════════════════════════════════════════════════════
