@@ -19,6 +19,7 @@ PO header status is AUTO-DERIVED from line items:
 All shipment/delivery tracking lives here – NOT on the Sales Order.
   • expected_ship_date    – when vendor expects to ship goods
   • expected_arrival_date – when goods arrive at warehouse or client (drop-ship)
+  • completed_at          – when the PO was actually completed
 Both are updated by the vendor so the business always knows the schedule.
 
 POLine
@@ -29,6 +30,8 @@ directly to the customer order that triggered it.
 Per-line tracking:
   • status         – each line has its own status (IN_PRODUCTION → DELIVERED)
   • delivered_qty  – running total of deliveries from fulfillment events
+  • delivered_at   – actual completion timestamp for drop-ship deliveries
+  • received_at    – actual receipt timestamp for in-house warehouse receipt
   • due_date       – per-line due date (inherited from SO line)
   • expected_ship_date / expected_arrival_date – per-line schedule
 """
@@ -94,6 +97,11 @@ class PurchaseOrder(Base, TimestampMixin):
         Date, nullable=True,
         comment="When goods are expected to arrive at warehouse or client (updated by vendor)",
     )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When this PO was actually completed",
+    )
 
     # ── Relationships ──────────────────────────────────────
     sales_order: Mapped["SalesOrder"] = relationship(
@@ -153,6 +161,16 @@ class POLine(Base):
     delivered_qty: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False,
         comment="Sum of all fulfillment events for this PO line",
+    )
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Actual delivery timestamp for drop-ship completion",
+    )
+    received_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Actual receipt timestamp for in-house warehouse receipt",
     )
 
     # ── Per-line date fields ──────────────────────────────
