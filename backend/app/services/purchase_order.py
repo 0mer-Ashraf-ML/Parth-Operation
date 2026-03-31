@@ -355,7 +355,9 @@ def update_purchase_order(
     """
     Update PO fields.
 
-    • shipment_type      – only changeable while not COMPLETED.
+    • shipment_type      – changeable while not COMPLETED. Existing line states
+      are normalized to the new flow and in-house warehouse inventory is unwound
+      when switching away from READY_FOR_PICKUP.
     • expected_ship_date / expected_arrival_date – free update.
     • status=COMPLETED  – marks the PO complete: every line gets delivered_qty
       set to full quantity, status DELIVERED, remaining 0 (inventory adjusted).
@@ -430,6 +432,10 @@ def update_purchase_order(
             raise BadRequestException(
                 "Cannot change shipment type on a COMPLETED PO"
             )
+        if current_user.role == UserRole.VENDOR:
+            raise ForbiddenException(
+                "Only Admins and Account Managers can change shipment type"
+            )
         new_shipment_type = kwargs["shipment_type"]
         if new_shipment_type != po.shipment_type:
             po_with_lines = db.execute(
@@ -437,19 +443,21 @@ def update_purchase_order(
                 .options(selectinload(PurchaseOrder.lines))
                 .where(PurchaseOrder.id == po.id)
             ).scalar_one()
+            old_shipment_type = po_with_lines.shipment_type
+            po.shipment_type = new_shipment_type
+            po_with_lines.shipment_type = new_shipment_type
 
-            progressed_lines = [
-                line.id
-                for line in (po_with_lines.lines or [])
-                if line.status != POLineStatus.IN_PRODUCTION or line.delivered_qty > 0
-            ]
-            if progressed_lines:
-                raise BadRequestException(
-                    "Cannot change shipment type after PO line progress has started. "
-                    "Reset the in-progress lines first or create a new PO if the flow changed."
+            for line in po_with_lines.lines or []:
+                _normalize_po_line_for_shipment_type_change(
+                    db,
+                    line,
+                    old_shipment_type=old_shipment_type,
+                    new_shipment_type=new_shipment_type,
                 )
 
-            po.shipment_type = new_shipment_type
+            db.flush()
+            derive_and_persist_po_status(db, po_with_lines)
+            derive_and_persist_so_status(db, po_with_lines.sales_order_id)
 
     # ── Date updates ───────────────────────────────────────
     if "expected_ship_date" in kwargs:
@@ -667,6 +675,62 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> tuple[int | None, "Deci
         return any_sv.vendor_id, any_sv.vendor_cost
 
     return None, None
+
+
+def _normalize_po_line_for_shipment_type_change(
+    db: Session,
+    line: POLine,
+    *,
+    old_shipment_type: ShipmentType,
+    new_shipment_type: ShipmentType,
+) -> None:
+    """
+    Translate a PO line into the target shipment flow without discarding progress.
+
+    The only inventory-bearing in-house state is READY_FOR_PICKUP, which means
+    the remaining quantity is currently sitting in warehouse stock. When the PO
+    changes away from in-house, that on-hand inventory must be removed.
+    """
+    if old_shipment_type == new_shipment_type:
+        return
+
+    if (
+        old_shipment_type == ShipmentType.IN_HOUSE
+        and line.status == POLineStatus.READY_FOR_PICKUP
+    ):
+        remaining = line.quantity - line.delivered_qty
+        if remaining > 0:
+            _adjust_inventory(db, line.sku_id, -remaining)
+
+    line.status = _status_for_shipment_type(
+        line=line,
+        shipment_type=new_shipment_type,
+    )
+
+
+def _status_for_shipment_type(
+    *,
+    line: POLine,
+    shipment_type: ShipmentType,
+) -> POLineStatus:
+    """Map the line's current progress into the requested shipment flow."""
+    if line.delivered_qty >= line.quantity:
+        return POLineStatus.DELIVERED
+
+    if shipment_type == ShipmentType.DROP_SHIP:
+        if line.status in (POLineStatus.PACKED_AND_SHIPPED, POLineStatus.READY_FOR_PICKUP):
+            return POLineStatus.PACKED_AND_SHIPPED
+        if line.delivered_qty > 0:
+            return POLineStatus.PACKED_AND_SHIPPED
+        return POLineStatus.IN_PRODUCTION
+
+    if line.status == POLineStatus.READY_FOR_PICKUP:
+        return POLineStatus.READY_FOR_PICKUP
+    if line.status == POLineStatus.PACKED_AND_SHIPPED:
+        return POLineStatus.PACKED_AND_SHIPPED
+    if line.delivered_qty > 0:
+        return POLineStatus.PACKED_AND_SHIPPED
+    return POLineStatus.IN_PRODUCTION
 
 
 # ── Valid LINE-level status transitions (mirrors PO-level) ──
