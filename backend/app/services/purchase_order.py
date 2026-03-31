@@ -430,7 +430,26 @@ def update_purchase_order(
             raise BadRequestException(
                 "Cannot change shipment type on a COMPLETED PO"
             )
-        po.shipment_type = kwargs["shipment_type"]
+        new_shipment_type = kwargs["shipment_type"]
+        if new_shipment_type != po.shipment_type:
+            po_with_lines = db.execute(
+                select(PurchaseOrder)
+                .options(selectinload(PurchaseOrder.lines))
+                .where(PurchaseOrder.id == po.id)
+            ).scalar_one()
+
+            progressed_lines = [
+                line.id
+                for line in (po_with_lines.lines or [])
+                if line.status != POLineStatus.IN_PRODUCTION or line.delivered_qty > 0
+            ]
+            if progressed_lines:
+                raise BadRequestException(
+                    "Cannot change shipment type after PO line progress has started. "
+                    "Reset the in-progress lines first or create a new PO if the flow changed."
+                )
+
+            po.shipment_type = new_shipment_type
 
     # ── Date updates ───────────────────────────────────────
     if "expected_ship_date" in kwargs:
