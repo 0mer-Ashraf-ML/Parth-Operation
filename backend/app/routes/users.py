@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import require_admin
 from app.schemas.auth import CurrentUser
-from app.schemas.user import UserCreate, UserOut, UserRoleUpdate, UserUpdate
+from app.schemas.user import (
+    UserClientAssignmentsPatch,
+    UserCreate,
+    UserRoleUpdate,
+    UserUpdate,
+    user_to_out,
+)
 from app.services import user as user_svc
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -29,7 +35,7 @@ def list_users(
     users = user_svc.list_users(db)
     return {
         "success": True,
-        "data": [UserOut.model_validate(u) for u in users],
+        "data": [user_to_out(u).model_dump() for u in users],
     }
 
 
@@ -43,7 +49,7 @@ def get_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.get_user(db, user_id)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    return {"success": True, "data": user_to_out(user).model_dump()}
 
 
 @router.post(
@@ -57,7 +63,7 @@ def create_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.create_user(db, body)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    return {"success": True, "data": user_to_out(user).model_dump()}
 
 
 @router.patch(
@@ -71,7 +77,7 @@ def update_user(
     db: Session = Depends(get_db),
 ):
     user = user_svc.update_user(db, user_id, body)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    return {"success": True, "data": user_to_out(user).model_dump()}
 
 
 @router.patch(
@@ -85,7 +91,21 @@ def set_user_role(
     db: Session = Depends(get_db),
 ):
     user = user_svc.set_user_role(db, user_id, body, current_user)
-    return {"success": True, "data": UserOut.model_validate(user)}
+    return {"success": True, "data": user_to_out(user).model_dump()}
+
+
+@router.patch(
+    "/{user_id}/client-assignments",
+    summary="Set Account Manager client assignments (replaces full list)",
+)
+def set_user_client_assignments(
+    user_id: int,
+    body: UserClientAssignmentsPatch,
+    _current_user: CurrentUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = user_svc.set_user_client_assignments(db, user_id, body.client_ids)
+    return {"success": True, "data": user_to_out(user).model_dump()}
 
 
 @router.delete(

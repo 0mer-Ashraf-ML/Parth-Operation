@@ -5,9 +5,10 @@ Admins cannot change their own role or vendor assignment via set_user_role.
 """
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
+from app.models.client import Client
 from app.models.enums import UserRole
 from app.models.user import ClientAssignment, User
 from app.models.vendor import Vendor
@@ -17,15 +18,23 @@ from app.services.auth import hash_password
 
 
 def get_user(db: Session, user_id: int) -> User:
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    user = db.execute(
+        select(User)
+        .options(selectinload(User.assigned_clients))
+        .where(User.id == user_id)
+    ).scalar_one_or_none()
     if user is None:
         raise NotFoundException(f"User with id={user_id} not found")
     return user
 
 
 def list_users(db: Session) -> list[User]:
-    stmt = select(User).order_by(User.id.asc())
-    return list(db.execute(stmt).scalars().all())
+    stmt = (
+        select(User)
+        .options(selectinload(User.assigned_clients))
+        .order_by(User.id.asc())
+    )
+    return list(db.execute(stmt).scalars().unique().all())
 
 
 def _email_taken(db: Session, email: str, exclude_user_id: int | None = None) -> bool:
@@ -81,7 +90,42 @@ def create_user(db: Session, data: UserCreate) -> User:
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return get_user(db, user.id)
+
+
+def set_user_client_assignments(
+    db: Session,
+    user_id: int,
+    client_ids: list[int],
+) -> User:
+    """
+    Replace Account Manager client assignments with the given client IDs.
+
+    Only users with role ACCOUNT_MANAGER may have assignments; others raise.
+    """
+    user = get_user(db, user_id)
+    if user.role != UserRole.ACCOUNT_MANAGER:
+        raise BadRequestException(
+            "Client assignments apply only to users with role Account Manager.",
+        )
+
+    unique_ids = sorted(set(client_ids))
+    if unique_ids:
+        found = db.execute(
+            select(Client.id).where(Client.id.in_(unique_ids))
+        ).scalars().all()
+        found_set = set(found)
+        missing = [cid for cid in unique_ids if cid not in found_set]
+        if missing:
+            raise BadRequestException(
+                f"Unknown client id(s): {', '.join(str(m) for m in missing)}",
+            )
+
+    _clear_client_assignments(db, user.id)
+    for cid in unique_ids:
+        db.add(ClientAssignment(user_id=user.id, client_id=cid))
+    db.commit()
+    return get_user(db, user.id)
 
 
 def update_user(db: Session, user_id: int, data: UserUpdate) -> User:
@@ -111,8 +155,7 @@ def update_user(db: Session, user_id: int, data: UserUpdate) -> User:
         user.is_active = payload["is_active"]
 
     db.commit()
-    db.refresh(user)
-    return user
+    return get_user(db, user.id)
 
 
 def _clear_client_assignments(db: Session, user_id: int) -> None:
@@ -149,8 +192,7 @@ def set_user_role(db: Session, user_id: int, data: UserRoleUpdate, actor: Curren
     user.vendor_id = new_vendor_id
 
     db.commit()
-    db.refresh(user)
-    return user
+    return get_user(db, user.id)
 
 
 def deactivate_user(db: Session, user_id: int, actor: CurrentUser) -> None:

@@ -19,10 +19,34 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     vendor_id: int | None = None
+    assigned_client_ids: list[int] = Field(
+        default_factory=list,
+        description="Clients assigned to this Account Manager (empty for other roles)",
+    )
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+def user_to_out(user) -> UserOut:
+    """Build UserOut from ORM User (includes assigned_client_ids from relationship)."""
+    from app.models.user import User as UserModel
+
+    if not isinstance(user, UserModel):
+        raise TypeError("user must be a User ORM instance")
+    ids = sorted({a.client_id for a in (user.assigned_clients or [])})
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        vendor_id=user.vendor_id,
+        assigned_client_ids=ids,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
 
 
 class UserCreate(BaseModel):
@@ -74,3 +98,12 @@ class UserRoleUpdate(BaseModel):
         if self.vendor_id is None:
             raise ValueError("vendor_id is required when role is vendor")
         return self
+
+
+class UserClientAssignmentsPatch(BaseModel):
+    """Replace all client assignments for an Account Manager (admin only)."""
+
+    client_ids: list[int] = Field(
+        default_factory=list,
+        description="Full list of client IDs this AM may access; empty clears all assignments",
+    )
