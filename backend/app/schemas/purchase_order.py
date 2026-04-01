@@ -46,6 +46,8 @@ class POLineOut(BaseModel):
     delivered_qty: int = 0
     remaining_qty: int = 0
     is_fully_delivered: bool = False
+    delivered_at: Optional[datetime] = None
+    received_at: Optional[datetime] = None
     due_date: Optional[date] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
@@ -116,6 +118,10 @@ class POUpdate(BaseModel):
         None,
         description="When goods are expected to arrive",
     )
+    reopen: Optional[bool] = Field(
+        None,
+        description="Reopen a completed PO and restore line/header state from actual progress",
+    )
 
     @field_validator("status")
     @classmethod
@@ -140,6 +146,7 @@ class POListOut(BaseModel):
     ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    completed_at: Optional[datetime] = None
     line_count: int = 0
     total_quantity: int = 0
     total_delivered: int = 0
@@ -164,6 +171,7 @@ class PODetailOut(BaseModel):
     ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    completed_at: Optional[datetime] = None
     total_quantity: int = 0
     total_delivered: int = 0
     total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
