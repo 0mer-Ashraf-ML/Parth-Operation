@@ -223,8 +223,8 @@ def _so_to_list_item(so) -> dict:
 def _so_to_detail(so) -> dict:
     """Build the full detail representation of a Sales Order with lines."""
     lines = sorted(so.lines, key=lambda ln: ln.line_number) if so.lines else []
-    has_pos = bool(so.purchase_orders) if hasattr(so, "purchase_orders") else False
-    is_deletable = (so.status == SOStatus.PENDING) and not has_pos
+    po_created = bool(so.purchase_orders)
+    is_deletable = (so.status == SOStatus.PENDING) and not po_created
 
     ship_to = (
         ClientAddressOut.model_validate(so.ship_to_address)
@@ -237,6 +237,7 @@ def _so_to_detail(so) -> dict:
         order_number=so.order_number,
         client_id=so.client_id,
         client_name=so.client.company_name if so.client else None,
+        po_created=po_created,
         ship_to_address_id=so.ship_to_address_id,
         ship_to_address=ship_to,
         ship_to_contact_name=so.ship_to_contact_name,
