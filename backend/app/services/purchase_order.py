@@ -464,6 +464,17 @@ def update_purchase_order(
                 .where(PurchaseOrder.id == po_id)
             ).scalar_one()
             for line in po.lines or []:
+                old_st = line.status
+                old_d = line.delivered_qty
+
+                if po.shipment_type == ShipmentType.IN_HOUSE:
+                    if old_st == POLineStatus.READY_FOR_PICKUP:
+                        remaining = line.quantity - old_d
+                        if remaining > 0:
+                            _adjust_inventory(db, line.sku_id, -remaining)
+                    elif old_st not in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
+                        pass
+
                 line.delivered_qty = line.quantity
                 line.status = POLineStatus.DELIVERED
             db.flush()
@@ -600,14 +611,25 @@ def update_po_line(
                     "The vendor marks Ready for Pickup, then an Admin confirms Delivered."
                 )
 
+            old_status = line.status
+
+            # In-house inventory: +qty when goods arrive at warehouse
             if (
                 po.shipment_type == ShipmentType.IN_HOUSE
                 and new_status == POLineStatus.READY_FOR_PICKUP
-                and line.delivered_qty < line.quantity
             ):
-                remaining_receipt = line.quantity - line.delivered_qty
-                _adjust_inventory(db, line.sku_id, remaining_receipt)
-                line.delivered_qty = line.quantity
+                _adjust_inventory(db, line.sku_id, +line.quantity)
+
+            # In-house inventory: when admin marks DELIVERED, subtract
+            # whatever is still in the warehouse (qty − already delivered).
+            if (
+                po.shipment_type == ShipmentType.IN_HOUSE
+                and new_status == POLineStatus.DELIVERED
+                and old_status == POLineStatus.READY_FOR_PICKUP
+            ):
+                remaining = line.quantity - line.delivered_qty
+                if remaining > 0:
+                    _adjust_inventory(db, line.sku_id, -remaining)
 
             if new_status == POLineStatus.DELIVERED and line.delivered_qty < line.quantity:
                 line.delivered_qty = line.quantity
