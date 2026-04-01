@@ -20,6 +20,7 @@ from app.routes.purchase_orders import generate_router as po_generate_router
 from app.routes.fulfillment import router as fulfillment_router
 from app.routes.pdf_parser import router as pdf_parser_router
 from app.routes.users import router as users_router
+from app.routes.chat import router as chat_router
 
 # ── Create application ─────────────────────────────────────
 app = FastAPI(
@@ -53,6 +54,7 @@ app.include_router(po_generate_router)
 app.include_router(fulfillment_router)
 app.include_router(pdf_parser_router)
 app.include_router(users_router)
+app.include_router(chat_router)
 
 
 # ── Health check ───────────────────────────────────────────

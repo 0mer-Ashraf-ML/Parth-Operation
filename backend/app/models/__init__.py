@@ -16,3 +16,4 @@ from app.models.sales_order import SalesOrder, SOLine  # noqa: F401
 from app.models.purchase_order import PurchaseOrder, POLine  # noqa: F401
 from app.models.fulfillment import FulfillmentEvent  # noqa: F401
 from app.models.audit import AuditLog  # noqa: F401
+from app.models.chat import Conversation, Message  # noqa: F401

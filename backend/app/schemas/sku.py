@@ -139,3 +139,18 @@ class SKUDetailOut(BaseModel):
     sku_vendors: list[SKUVendorOut] = []
 
     model_config = {"from_attributes": True}
+
+
+# ═══════════════════════════════════════════════════════════
+#  ANALYTICS
+# ═══════════════════════════════════════════════════════════
+
+class SKUOrderVolumeBreakdown(BaseModel):
+    po_number: str
+    quantity: int
+
+class SKUOrderVolumeOut(BaseModel):
+    sku_id: int
+    date_range: str
+    total_ordered_quantity: int
+    breakdown_by_po: list[SKUOrderVolumeBreakdown] = []

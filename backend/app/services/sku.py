@@ -9,8 +9,9 @@ Key business rules:
   • SKUVendor maps vendors that can supply a given SKU.
 """
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session, selectinload
+from datetime import datetime, date
 
 from app.exceptions import (
     BadRequestException,
@@ -423,3 +424,38 @@ def resolve_tier_price(db: Session, sku_id: int, quantity: int):
             matched_tier = tier  # fallback to highest qualifying tier
 
     return matched_tier
+
+
+def get_sku_order_volume(db: Session, sku_id: int, date_from_str: str, date_to_str: str) -> dict:
+    """
+    Aggregate PO line quantities for a SKU across a date range.
+    date_from_str and date_to_str should be 'YYYY-MM-DD'.
+    """
+    from app.models.purchase_order import POLine, PurchaseOrder
+    
+    # Ensure SKU exists
+    get_sku(db, sku_id)
+
+    d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    d_to = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+    
+    # Query POLines for the SKU attached to POs created in that date range
+    lines = db.execute(
+        select(POLine)
+        .join(PurchaseOrder, POLine.purchase_order_id == PurchaseOrder.id)
+        .where(
+            POLine.sku_id == sku_id,
+            func.date(PurchaseOrder.created_at) >= d_from,
+            func.date(PurchaseOrder.created_at) <= d_to
+        )
+    ).scalars().all()
+    
+    total = sum(l.quantity for l in lines)
+    breakdown = [{"po_number": l.purchase_order.po_number, "quantity": l.quantity} for l in lines if l.purchase_order]
+    
+    return {
+        "sku_id": sku_id,
+        "date_range": f"{date_from_str} to {date_to_str}",
+        "total_ordered_quantity": total,
+        "breakdown_by_po": breakdown
+    }

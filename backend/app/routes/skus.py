@@ -29,6 +29,7 @@ from app.schemas.sku import (
     TierPricingCreate,
     TierPricingOut,
     TierPricingUpdate,
+    SKUOrderVolumeOut
 )
 from app.services import sku as sku_svc
 
@@ -71,6 +72,29 @@ def get_sku(
     sku = sku_svc.get_sku(db, sku_id)
     detail = _sku_to_detail(sku, hide_tier_pricing=(current_user.role == UserRole.VENDOR))
     return {"success": True, "data": detail}
+
+
+@router.get(
+    "/{sku_id}/volume",
+    summary="Get SKU order volume analytics over a date range",
+    response_model=dict,
+)
+def get_sku_volume(
+    sku_id: int,
+    date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_to: str = Query(..., description="End date (YYYY-MM-DD)"),
+    current_user: CurrentUser = Depends(require_admin), # Usually analytics is restricted
+    db: Session = Depends(get_db),
+):
+    """
+    Computes total order volume for a SKU within the specified date range 
+    using PO line data.
+    """
+    volume_data = sku_svc.get_sku_order_volume(db, sku_id, date_from, date_to)
+    return {
+        "success": True, 
+        "data": SKUOrderVolumeOut.model_validate(volume_data)
+    }
 
 
 @router.post(
