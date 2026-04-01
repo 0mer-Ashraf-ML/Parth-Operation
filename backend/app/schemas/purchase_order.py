@@ -108,7 +108,7 @@ class POUpdate(BaseModel):
     )
     shipment_type: Optional[ShipmentType] = Field(
         None,
-        description="Change shipment type (only while STARTED / IN_PRODUCTION)",
+        description="Change shipment type on an active PO; backend remaps line status/inventory to the selected flow",
     )
     expected_ship_date: Optional[date] = Field(
         None,
