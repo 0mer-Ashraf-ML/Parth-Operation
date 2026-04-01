@@ -19,6 +19,11 @@ from app.services.sales_order import list_sales_orders, get_sales_order, create_
 from app.services.purchase_order import list_purchase_orders, get_purchase_order, generate_pos_from_so, update_po_line
 from app.services.fulfillment import get_fulfillment_overview, record_fulfillment_event as _record_fulfillment_event
 from app.services.pdf_parser import parse_pdf_with_gemini
+from app.services.client import list_clients, create_client as _create_client
+from app.services.sku import create_sku as _create_sku
+from app.schemas.client import ClientCreate, ClientContactCreate, ClientAddressCreate
+from app.schemas.sku import SKUCreate
+from app.models.enums import AddressType, ContactType
 
 # ── Gemini Configuration ───────────────────────────────────────────────────────
 if settings.GEMINI_API_KEY:
@@ -244,11 +249,168 @@ async def process_chat_stream(
     def find_sku(search: str):
         """Tool 12: A SKU ID from a search term (like name or sku_code)."""
         try:
-            from app.services.sku import list_skus
-            skus = list_skus(db, current_user, search=search)
-            return [to_json_dict({"id": s.id, "sku_code": s.sku_code, "name": s.name}) for s in skus]
+            from app.services.sku import list_skus as _list_skus
+            skus = _list_skus(db, search=search)
+            if not skus:
+                return {"found": False, "message": f"No SKU found matching '{search}'."}
+            return {
+                "found": True,
+                "skus": [to_json_dict({"id": s.id, "sku_code": s.sku_code, "name": s.name}) for s in skus]
+            }
         except Exception as e:
             return f"Error: {e}"
+
+    def find_client(search: str = None):
+        """
+        Tool 13: Look up a client by company name or partial name.
+        search is optional — omit it to list ALL clients.
+        Returns a list of matching clients with their database integer IDs.
+        ALWAYS call this tool before create_sales_order to resolve the client_id.
+        Never ask the user for a client_id.
+        """
+        try:
+            clients = list_clients(db, current_user, search=search)
+            if not clients:
+                msg = f"No client found matching '{search}'." if search else "No clients in the system."
+                return {"found": False, "message": msg}
+            return {
+                "found": True,
+                "clients": [
+                    to_json_dict({"id": c.id, "company_name": c.company_name, "is_active": c.is_active})
+                    for c in clients
+                ]
+            }
+        except Exception as e:
+            return f"Error: {e}"
+
+    def create_client_from_pdf(
+        company_name: str,
+        contact_name: str = None,
+        contact_email: str = None,
+        contact_phone: str = None,
+        billing_address_line_1: str = None,
+        billing_address_line_2: str = None,
+        billing_city: str = None,
+        billing_state: str = None,
+        billing_zip: str = None,
+        billing_country: str = "US",
+        ship_to_address_line_1: str = None,
+        ship_to_address_line_2: str = None,
+        ship_to_city: str = None,
+        ship_to_state: str = None,
+        ship_to_zip: str = None,
+        ship_to_country: str = "US",
+        confirmed: bool = False,
+    ):
+        """
+        Tool 14: Create a brand-new client using data extracted from a PDF.
+        Use this ONLY when find_client() returned found=False.
+        Pass all address/contact fields directly from the PDF draft_data.
+        Requires confirmation: call with confirmed=False first, then confirmed=True.
+        Returns the new client's integer id and the ship_to_address id.
+        """
+        if not confirmed:
+            return (
+                f"STATUS: REQUIRES_CONFIRMATION. Will create new client '{company_name}' "
+                f"with billing and ship-to addresses from the PDF."
+            )
+        try:
+            contacts = []
+            if contact_name:
+                contacts.append(ClientContactCreate(
+                    contact_type=ContactType.MAIN,
+                    name=contact_name,
+                    email=contact_email,
+                    phone=contact_phone,
+                ))
+
+            addresses = []
+            if billing_address_line_1 and billing_city:
+                addresses.append(ClientAddressCreate(
+                    address_type=AddressType.BILLING,
+                    label="Billing",
+                    address_line_1=billing_address_line_1,
+                    address_line_2=billing_address_line_2,
+                    city=billing_city,
+                    state=billing_state or "",
+                    zip_code=billing_zip or "00000",
+                    country=billing_country or "US",
+                    is_default=True,
+                ))
+
+            ship_to_id = None
+            if ship_to_address_line_1 and ship_to_city:
+                addresses.append(ClientAddressCreate(
+                    address_type=AddressType.SHIP_TO,
+                    label="Ship-To",
+                    address_line_1=ship_to_address_line_1,
+                    address_line_2=ship_to_address_line_2,
+                    city=ship_to_city,
+                    state=ship_to_state or "",
+                    zip_code=ship_to_zip or "00000",
+                    country=ship_to_country or "US",
+                    is_default=True,
+                ))
+
+            client_data = ClientCreate(
+                company_name=company_name,
+                payment_terms=30,
+                contacts=contacts,
+                addresses=addresses,
+            )
+            client = _create_client(db, current_user, client_data)
+
+            # Locate the ship_to address id so caller can pass it to create_sales_order
+            for addr in client.addresses:
+                if addr.address_type == AddressType.SHIP_TO:
+                    ship_to_id = addr.id
+                    break
+
+            return to_json_dict({
+                "success": True,
+                "client_id": client.id,
+                "company_name": client.company_name,
+                "ship_to_address_id": ship_to_id,
+            })
+        except Exception as e:
+            return f"Error creating client: {e}"
+
+    def create_sku_from_pdf(
+        sku_code: str,
+        name: str,
+        description: str = None,
+        unit_price: float = None,
+        confirmed: bool = False,
+    ):
+        """
+        Tool 15: Create a new SKU for a line item not found in the database.
+        Use this ONLY when find_sku() returned no results for this sku_code / description.
+        sku_code: use the code from the PDF line item (or generate one from description if none).
+        name: human-readable product name.
+        unit_price: optional sell price; creates a single tier-price entry if provided.
+        Requires confirmation: call with confirmed=False first, then confirmed=True.
+        Returns the new SKU's integer id.
+        """
+        if not confirmed:
+            return (
+                f"STATUS: REQUIRES_CONFIRMATION. Will create new SKU '{sku_code}' — {name}."
+            )
+        try:
+            from app.schemas.sku import TierPricingCreate
+            tier_prices = []
+            if unit_price is not None and unit_price > 0:
+                tier_prices.append(TierPricingCreate(min_qty=1, max_qty=None, unit_price=unit_price))
+
+            sku_data = SKUCreate(
+                sku_code=sku_code,
+                name=name,
+                description=description,
+                tier_prices=tier_prices,
+            )
+            sku = _create_sku(db, sku_data)
+            return to_json_dict({"success": True, "sku_id": sku.id, "sku_code": sku.sku_code})
+        except Exception as e:
+            return f"Error creating SKU: {e}"
 
     def _sanitize_args(raw: dict) -> dict:
         """
@@ -276,7 +438,10 @@ async def process_chat_stream(
         "update_po_line_status": update_po_line_status,
         "record_fulfillment_event": record_fulfillment_event,
         "get_sku_order_volume": get_sku_order_volume,
-        "find_sku": find_sku
+        "find_sku": find_sku,
+        "find_client": find_client,
+        "create_client_from_pdf": create_client_from_pdf,
+        "create_sku_from_pdf": create_sku_from_pdf,
     }
 
     # ── Context Construction ──────────────────────────────────────────────────
@@ -288,22 +453,48 @@ async def process_chat_stream(
     - User ID: {current_user.user_id}
     - Role: {current_user.role.value}
 
-    Rules:
-    1. NEVER make up data. Always use the tools to fetch real data.
-    2. ALWAYS call the appropriate tool immediately instead of asking clarifying questions.
-       - If the user asks about purchase orders without specifying a PO number, call find_purchase_order() with no arguments to list them all.
-       - If the user asks about sales orders without a specific order number, call find_sales_order() with no arguments.
-       - Only ask for clarification if the tool requires a parameter you cannot guess.
-    3. ENTITY ID RESOLUTION: Detail and write tools require DATABASE INTEGER IDs, NOT order number strings.
-       - Always call find_sales_order or find_purchase_order first to get the integer id.
-       - Example: for "SO-2026-201466", call find_sales_order(search="SO-2026-201466") → get id=186 → use id=186 in generate_purchase_orders.
-       - NEVER pass a partial number from the order string (e.g. 201466 from SO-2026-201466 is wrong; use the id returned by find_sales_order).
-    4. WRITE ACTIONS REQUIRE CONFIRMATION:
-       - Call the write tool with confirmed=False first. The tool returns REQUIRES_CONFIRMATION.
-       - Then summarize what you found and what will happen, and ask the user to reply "Yes" to confirm.
-       - Once the user says "Yes" or "confirm" or "go ahead", call the same tool again with confirmed=True.
-    4. If the user attached a PDF, call parse_order_pdf() first, present the extracted draft, then ask for confirmation before creating the SO.
-    5. Be concise and operational. No unnecessary filler text.
+    CORE RULES:
+    1. NEVER make up data. Always use tools to fetch real data.
+    2. NEVER ask the user for any IDs (client_id, sku_id, so_id, etc.). Resolve them yourself.
+    3. ENTITY ID RESOLUTION (always do this before any write):
+       - Client → call find_client(search="<company name>")
+       - SKU    → call find_sku(search="<sku_code or product name>")
+       - SO/PO  → call find_sales_order / find_purchase_order first, use the returned integer "id"
+
+    PDF → SALES ORDER FLOW (follow this EXACT sequence):
+
+    PHASE 1 — DISCOVERY (do all lookups, create NOTHING yet):
+      a. Call parse_order_pdf() to extract draft data from the PDF.
+      b. Call find_client(search="<customer_name>") — note if client exists or not.
+      c. For EVERY line item in the PDF, call find_sku(search="<sku_code or description>") — note which exist and which are missing.
+
+    PHASE 2 — SINGLE CONFIRMATION (present ONE unified summary):
+      Show the user a clear table covering ALL of the following:
+        • Client status:  ✓ Found (ID: X) or ✗ Not found — will be CREATED
+        • Each SKU:       ✓ Found (ID: Y, qty Z) or ✗ Not found — will be CREATED
+        • Ship-to address extracted from PDF
+        • Billing address extracted from PDF
+      Then ask: "Shall I proceed? Reply YES to create everything above and the Sales Order."
+
+    PHASE 3 — EXECUTION (only after user says YES/confirm/go ahead):
+      Execute in this exact order:
+        1. If client was not found: call create_client_from_pdf(..., confirmed=True) — use all address/contact fields from the PDF.
+        2. For each missing SKU: call create_sku_from_pdf(..., confirmed=True) — use sku_code and name from the PDF line item.
+        3. Call create_sales_order(..., confirmed=True) using the now-resolved client_id and sku_ids.
+
+    IMPORTANT RULES FOR THE FLOW:
+    - In PHASE 1 you are only READING — do NOT call create_client_from_pdf or create_sku_from_pdf yet.
+    - Do NOT call create_sales_order(confirmed=False) — skip the intermediate confirmation step and go straight to confirmed=True once the user says YES.
+    - Do NOT ask the user for any missing info; derive everything from the PDF data.
+    - If a SKU code is missing from the PDF, generate one from the product description (e.g. first letters, max 20 chars).
+    - If billing and ship-to addresses are the same in the PDF, use the same values for both.
+
+    OTHER WRITE ACTIONS (non-PDF):
+    - Call the write tool with confirmed=False first. The tool returns REQUIRES_CONFIRMATION.
+    - Summarize what will happen and ask the user to confirm.
+    - Once confirmed, call the same tool again with confirmed=True.
+
+    Be concise and operational. No unnecessary filler text.
     """
 
     model = genai.GenerativeModel(
@@ -401,7 +592,7 @@ async def process_chat_stream(
 
     # ── Execution Loop ─────────────────────────────────────────────────────────
 
-    max_loops = 5
+    max_loops = 15  # PDF flow: parse(1) + find_client(1) + find_sku×N + creates + final text
     loop_count = 0
 
     current_prompt = prompt

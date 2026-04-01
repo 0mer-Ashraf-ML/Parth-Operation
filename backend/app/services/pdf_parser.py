@@ -211,11 +211,9 @@ def parse_pdf_with_gemini(pdf_bytes: bytes, filename: str) -> dict:
     # Extract text from response
     raw_text = response.text.strip()
 
-    # Clean up: Gemini sometimes wraps JSON in markdown code fences
+    # ── Step 1: strip markdown code fences (```json ... ``` or ``` ... ```) ──
     if raw_text.startswith("```"):
-        # Remove ```json ... ``` or ``` ... ```
         lines = raw_text.split("\n")
-        # Find first and last ``` lines
         start = 0
         end = len(lines) - 1
         for i, line in enumerate(lines):
@@ -228,8 +226,23 @@ def parse_pdf_with_gemini(pdf_bytes: bytes, filename: str) -> dict:
                 break
         raw_text = "\n".join(lines[start:end])
 
+    # ── Step 2: fix common Gemini JSON quirks before parsing ─────────────────
+    # Order matters: remove comments FIRST so trailing-comma regex can then
+    # see what was hiding behind the comment.
+
+    # 2a. Remove single-line // comments (Gemini occasionally adds these)
+    cleaned = re.sub(r"//[^\n]*", "", raw_text)
+
+    # 2b. Remove trailing commas before ] or }
+    #     Gemini sometimes outputs  {"key": "value",}  which is invalid JSON.
+    #     Run twice to handle nested objects where comment removal exposed
+    #     a second trailing comma in the outer structure.
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+
+    # ── Step 3: parse ─────────────────────────────────────────────────────────
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response as JSON: {e}\nRaw: {raw_text[:500]}")
         raise BadRequestException(
