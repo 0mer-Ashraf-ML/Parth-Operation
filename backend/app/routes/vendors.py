@@ -15,7 +15,7 @@ Permission matrix:
     Vendor clients      │  ✓    │  ✓  │  ✓ (own only)
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -44,7 +44,14 @@ router = APIRouter(prefix="/vendors", tags=["Vendors"])
     summary="List vendors",
 )
 def list_vendors(
-    is_active: bool | None = Query(None, description="Filter by active status"),
+    is_active: bool | None = Query(
+        True,
+        description=(
+            "Filter by active status. "
+            "Default=true (only active vendors — safe for dropdowns). "
+            "Pass false for inactive only, or omit the param to get all."
+        ),
+    ),
     search: str | None = Query(None, description="Search by company name"),
     current_user: CurrentUser = Depends(require_any_role),
     db: Session = Depends(get_db),
@@ -110,15 +117,33 @@ def update_vendor(
 
 @router.delete(
     "/{vendor_id}",
-    summary="Soft-delete a vendor (deactivate)",
+    summary="Deactivate a vendor (soft-delete)",
 )
 def delete_vendor(
     vendor_id: int,
+    force_unlink: bool = Query(
+        False,
+        description=(
+            "If the vendor is linked to active SKUs, the first call (force_unlink=false) "
+            "returns 409 with the full list of linked SKUs. "
+            "After the admin confirms the dialog, call again with force_unlink=true "
+            "to unlink all SKUs and deactivate the vendor in one shot."
+        ),
+    ),
     current_user: CurrentUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    vendor_svc.delete_vendor(db, current_user, vendor_id)
-    return {"success": True, "data": {"message": "Vendor deactivated"}}
+    result = vendor_svc.delete_vendor(db, current_user, vendor_id, force_unlink=force_unlink)
+
+    if result["unlinked_skus_count"] > 0:
+        msg = (
+            f"Vendor '{result['vendor_name']}' has been deactivated. "
+            f"{result['unlinked_skus_count']} SKU(s) were unlinked."
+        )
+    else:
+        msg = f"Vendor '{result['vendor_name']}' has been deactivated."
+
+    return {"success": True, "data": {"message": msg, **result}}
 
 
 # ═══════════════════════════════════════════════════════════
