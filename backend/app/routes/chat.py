@@ -67,6 +67,32 @@ def get_messages(
         
     return list(conv.messages)
 
+@router.delete("/{conversation_id}", status_code=status.HTTP_200_OK)
+def delete_conversation(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Permanently delete a conversation and all its messages.
+    Users can only delete their own conversations.
+    """
+    conv = db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.user_id,
+        )
+    ).scalar_one_or_none()
+
+    if not conv:
+        raise NotFoundException("Conversation not found")
+
+    title = conv.title
+    db.delete(conv)
+    db.commit()
+    return {"success": True, "message": f"Conversation '{title}' has been deleted."}
+
+
 @router.post("/{conversation_id}/messages/stream")
 async def stream_message(
     conversation_id: str,
