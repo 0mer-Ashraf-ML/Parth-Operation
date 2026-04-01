@@ -6,10 +6,15 @@ Admin and Account Managers can list/view vendors.
 Vendors can only see their own record.
 """
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.exceptions import ConflictException, ForbiddenException, NotFoundException
+from app.exceptions import (
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.models.enums import UserRole
 from app.models.vendor import Vendor, VendorAddress
 from app.schemas.auth import CurrentUser
@@ -130,6 +135,7 @@ def update_vendor(
 def delete_vendor(db: Session, current_user: CurrentUser, vendor_id: int) -> None:
     """Soft-delete a vendor (set is_active=False).  Only Admins."""
     vendor = get_vendor(db, current_user, vendor_id)
+    _assert_vendor_can_be_deactivated(db, vendor_id)
     vendor.is_active = False
     db.commit()
 
@@ -236,3 +242,36 @@ def _clear_default_addresses(db: Session, vendor_id: int) -> None:
     ).scalars().all()
     for addr in addresses:
         addr.is_default = False
+
+
+def _assert_vendor_can_be_deactivated(db: Session, vendor_id: int) -> None:
+    """
+    Block vendor deactivation while active SKUs still reference the vendor.
+
+    The frontend can present the returned SKU codes to the admin so they can
+    unlink or reassign those SKUs before retrying the deactivation.
+    """
+    from app.models.sku import SKU, SKUVendor
+
+    linked_skus = db.execute(
+        select(SKU.sku_code)
+        .outerjoin(
+            SKUVendor,
+            (SKUVendor.sku_id == SKU.id) & (SKUVendor.vendor_id == vendor_id),
+        )
+        .where(
+            SKU.is_active.is_(True),
+            or_(
+                SKU.default_vendor_id == vendor_id,
+                SKU.secondary_vendor_id == vendor_id,
+                SKUVendor.id.is_not(None),
+            ),
+        )
+        .order_by(SKU.sku_code.asc())
+    ).scalars().all()
+
+    if linked_skus:
+        raise BadRequestException(
+            "Cannot deactivate vendor while it is still linked to active SKUs: "
+            f"{', '.join(linked_skus)}. Reassign or unlink those SKU relationships first.",
+        )

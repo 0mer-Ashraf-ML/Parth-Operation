@@ -90,19 +90,11 @@ def create_sku(db: Session, data: SKUCreate) -> SKU:
 
     # Validate default vendor exists
     if data.default_vendor_id is not None:
-        vendor = db.execute(
-            select(Vendor).where(Vendor.id == data.default_vendor_id)
-        ).scalar_one_or_none()
-        if vendor is None:
-            raise BadRequestException(f"Vendor with id={data.default_vendor_id} not found")
+        _get_active_vendor_or_400(db, data.default_vendor_id)
 
     # Validate secondary vendor exists
     if data.secondary_vendor_id is not None:
-        sec_vendor = db.execute(
-            select(Vendor).where(Vendor.id == data.secondary_vendor_id)
-        ).scalar_one_or_none()
-        if sec_vendor is None:
-            raise BadRequestException(f"Vendor with id={data.secondary_vendor_id} not found")
+        _get_active_vendor_or_400(db, data.secondary_vendor_id)
         if data.secondary_vendor_id == data.default_vendor_id:
             raise BadRequestException("Secondary vendor cannot be the same as the default vendor")
 
@@ -148,23 +140,11 @@ def update_sku(db: Session, sku_id: int, data: SKUUpdate) -> SKU:
 
     # Validate vendor if changing
     if "default_vendor_id" in update_data and update_data["default_vendor_id"] is not None:
-        vendor = db.execute(
-            select(Vendor).where(Vendor.id == update_data["default_vendor_id"])
-        ).scalar_one_or_none()
-        if vendor is None:
-            raise BadRequestException(
-                f"Vendor with id={update_data['default_vendor_id']} not found"
-            )
+        _get_active_vendor_or_400(db, update_data["default_vendor_id"])
 
     # Validate secondary vendor if changing
     if "secondary_vendor_id" in update_data and update_data["secondary_vendor_id"] is not None:
-        sec_vendor = db.execute(
-            select(Vendor).where(Vendor.id == update_data["secondary_vendor_id"])
-        ).scalar_one_or_none()
-        if sec_vendor is None:
-            raise BadRequestException(
-                f"Vendor with id={update_data['secondary_vendor_id']} not found"
-            )
+        _get_active_vendor_or_400(db, update_data["secondary_vendor_id"])
         # Check not same as default
         effective_default = update_data.get("default_vendor_id", sku.default_vendor_id)
         if update_data["secondary_vendor_id"] == effective_default:
@@ -288,11 +268,7 @@ def add_sku_vendor(db: Session, sku_id: int, data: SKUVendorCreate) -> SKUVendor
     sku = get_sku(db, sku_id)
 
     # Validate vendor exists
-    vendor = db.execute(
-        select(Vendor).where(Vendor.id == data.vendor_id)
-    ).scalar_one_or_none()
-    if vendor is None:
-        raise BadRequestException(f"Vendor with id={data.vendor_id} not found")
+    _get_active_vendor_or_400(db, data.vendor_id)
 
     # Check for duplicate
     existing = db.execute(
@@ -373,13 +349,17 @@ def remove_sku_vendor(db: Session, sku_id: int, vendor_id: int) -> None:
 
 
 def list_sku_vendors(db: Session, sku_id: int) -> list[SKUVendor]:
-    """List all vendor mappings for a SKU."""
+    """List active vendor mappings for a SKU."""
     get_sku(db, sku_id)  # ensures SKU exists
     return list(
         db.execute(
             select(SKUVendor)
             .options(selectinload(SKUVendor.vendor))
-            .where(SKUVendor.sku_id == sku_id)
+            .join(Vendor, Vendor.id == SKUVendor.vendor_id)
+            .where(
+                SKUVendor.sku_id == sku_id,
+                Vendor.is_active.is_(True),
+            )
         ).scalars().all()
     )
 
@@ -396,6 +376,20 @@ def _clear_default_sku_vendor(db: Session, sku_id: int) -> None:
     ).scalars().all()
     for r in rows:
         r.is_default = False
+
+
+def _get_active_vendor_or_400(db: Session, vendor_id: int) -> Vendor:
+    """Return an active vendor or raise a user-facing validation error."""
+    vendor = db.execute(
+        select(Vendor).where(Vendor.id == vendor_id)
+    ).scalar_one_or_none()
+    if vendor is None:
+        raise BadRequestException(f"Vendor with id={vendor_id} not found")
+    if not vendor.is_active:
+        raise BadRequestException(
+            f"Vendor '{vendor.company_name}' is inactive and cannot be linked to a SKU",
+        )
+    return vendor
 
 
 def resolve_tier_price(db: Session, sku_id: int, quantity: int):

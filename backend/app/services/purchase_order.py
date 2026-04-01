@@ -615,9 +615,12 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> tuple[int | None, "Deci
 
     # 1. Explicit default in sku_vendors
     default_sv = db.execute(
-        select(SKUVendor).where(
+        select(SKUVendor)
+        .join(Vendor, Vendor.id == SKUVendor.vendor_id)
+        .where(
             SKUVendor.sku_id == sku_id,
             SKUVendor.is_default == True,  # noqa: E712
+            Vendor.is_active.is_(True),
         )
     ).scalar_one_or_none()
     if default_sv is not None:
@@ -625,14 +628,28 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> tuple[int | None, "Deci
 
     # 2. SKU.default_vendor_id
     sku = db.execute(
-        select(SKU).where(SKU.id == sku_id)
+        select(SKU).where(
+            SKU.id == sku_id,
+            SKU.is_active.is_(True),
+        )
     ).scalar_one_or_none()
     if sku and sku.default_vendor_id:
+        default_vendor = db.execute(
+            select(Vendor).where(
+                Vendor.id == sku.default_vendor_id,
+                Vendor.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if default_vendor is None:
+            return None, None
         # Try to find vendor_cost from sku_vendors for this vendor
         sv = db.execute(
-            select(SKUVendor).where(
+            select(SKUVendor)
+            .join(Vendor, Vendor.id == SKUVendor.vendor_id)
+            .where(
                 SKUVendor.sku_id == sku_id,
                 SKUVendor.vendor_id == sku.default_vendor_id,
+                Vendor.is_active.is_(True),
             )
         ).scalar_one_or_none()
         cost = sv.vendor_cost if sv else None
@@ -641,7 +658,9 @@ def _resolve_vendor_for_sku(db: Session, sku_id: int) -> tuple[int | None, "Deci
     # 3. First linked vendor (non-default fallback)
     any_sv = db.execute(
         select(SKUVendor)
+        .join(Vendor, Vendor.id == SKUVendor.vendor_id)
         .where(SKUVendor.sku_id == sku_id)
+        .where(Vendor.is_active.is_(True))
         .limit(1)
     ).scalar_one_or_none()
     if any_sv is not None:
