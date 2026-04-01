@@ -25,10 +25,12 @@ class AppException(Exception):
         status_code: int = 500,
         detail: str = "An unexpected error occurred",
         error_code: str = "INTERNAL_ERROR",
+        extra: dict | None = None,
     ):
         self.status_code = status_code
         self.detail = detail
         self.error_code = error_code
+        self.extra = extra  # optional structured payload (e.g. linked SKU list)
 
 
 # ── Concrete exceptions ───────────────────────────────────
@@ -54,8 +56,8 @@ class NotFoundException(AppException):
 
 
 class ConflictException(AppException):
-    def __init__(self, detail: str = "Resource conflict", error_code: str = "CONFLICT"):
-        super().__init__(status_code=409, detail=detail, error_code=error_code)
+    def __init__(self, detail: str = "Resource conflict", error_code: str = "CONFLICT", extra: dict | None = None):
+        super().__init__(status_code=409, detail=detail, error_code=error_code, extra=extra)
 
 
 class ValidationException(AppException):
@@ -67,13 +69,10 @@ class ValidationException(AppException):
 
 async def app_exception_handler(_request: Request, exc: AppException) -> JSONResponse:
     """Return a uniform JSON error body for every AppException."""
+    error_body: dict = {"code": exc.error_code, "message": exc.detail}
+    if exc.extra:
+        error_body["details"] = exc.extra
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": {
-                "code": exc.error_code,
-                "message": exc.detail,
-            },
-        },
+        content={"success": False, "error": error_body},
     )
