@@ -514,11 +514,34 @@ def update_purchase_order(
 
     # ── Shipment type change ───────────────────────────────
     if "shipment_type" in kwargs and kwargs["shipment_type"] is not None:
-        if po.status == POStatus.COMPLETED:
-            raise BadRequestException(
-                "Cannot change shipment type on a COMPLETED PO"
-            )
-        po.shipment_type = kwargs["shipment_type"]
+        new_shipment_type = kwargs["shipment_type"]
+        if new_shipment_type != po.shipment_type:
+            # Re-load lines for the check
+            po_with_lines = db.execute(
+                select(PurchaseOrder)
+                .options(selectinload(PurchaseOrder.lines))
+                .where(PurchaseOrder.id == po_id)
+            ).scalar_one()
+
+            blocked_statuses = {POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED}
+            blocking_lines = [
+                ln for ln in (po_with_lines.lines or [])
+                if ln.status in blocked_statuses
+            ]
+
+            if blocking_lines:
+                statuses_desc = ", ".join(
+                    f"Line #{ln.id} ({ln.status.value})" for ln in blocking_lines
+                )
+                raise BadRequestException(
+                    f"Cannot change shipment type on PO '{po.po_number}': "
+                    f"one or more lines have already passed the point of no return. "
+                    f"Blocked line(s): {statuses_desc}. "
+                    f"Shipment type can only be changed while all lines are "
+                    f"IN_PRODUCTION or PACKED_AND_SHIPPED."
+                )
+
+        po.shipment_type = new_shipment_type
 
     # ── Date updates ───────────────────────────────────────
     if "expected_ship_date" in kwargs:
