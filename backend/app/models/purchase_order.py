@@ -182,6 +182,11 @@ class POLine(Base):
         Date, nullable=True,
         comment="Per-line expected arrival date (vendor can update individually)",
     )
+    delivered_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date,
+        nullable=True,
+        comment="UTC calendar date when line first reached DELIVERED",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,

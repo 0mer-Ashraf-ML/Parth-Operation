@@ -22,6 +22,8 @@ Key business rules:
       • Drop-ship POs NEVER affect inventory (goods ship vendor → customer).
 """
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func as sa_func, select
 from sqlalchemy.orm import Session, attributes, selectinload
 
@@ -274,6 +276,22 @@ def get_fulfillment_event(
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 
+def stamp_po_line_delivered_date(line: POLine) -> None:
+    """Set delivered_date once when line is DELIVERED (UTC calendar date)."""
+    st = line.status
+    # PG po_line_status uses enum labels (DELIVERED); tolerate Enum or edge bindings
+    is_delivered = st == POLineStatus.DELIVERED or (
+        getattr(st, "name", None) == "DELIVERED"
+    )
+    if not is_delivered:
+        return
+    if line.delivered_date is not None:
+        return
+    line.delivered_date = datetime.now(timezone.utc).date()
+    # Same class of issue as status: ensure the UPDATE includes this column on PostgreSQL
+    attributes.flag_modified(line, "delivered_date")
+
+
 def sum_fulfillment_qty_for_line(db: Session, po_line_id: int) -> int:
     """Sum all fulfillment event quantities for a PO line (public for PO line updates)."""
     result = db.execute(
@@ -325,7 +343,6 @@ def sync_po_line_status_from_delivered_qty(
         shipment = po.shipment_type if po is not None else ShipmentType.DROP_SHIP
 
     in_house = _shipment_type_is_in_house(shipment)
-    print(f"in_house: {in_house}")
 
     if in_house:
         if prev_status in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
@@ -345,6 +362,8 @@ def sync_po_line_status_from_delivered_qty(
         line.status = new_status
         # Native PG enums + str Enum can skip emitting status on flush unless forced
         attributes.flag_modified(line, "status")
+
+    stamp_po_line_delivered_date(line)
 
 
 def _shipment_type_is_in_house(shipment_type: ShipmentType | str | None) -> bool:
@@ -386,11 +405,13 @@ def fix_fully_received_po_line_status(
     if line.status != target:
         line.status = target
         attributes.flag_modified(line, "status")
+        stamp_po_line_delivered_date(line)
         return True
 
     # Sync may have already set status to target in Python without marking the column
     # dirty, so commit would persist delivered_qty but not status — force an UPDATE.
     attributes.flag_modified(line, "status")
+    stamp_po_line_delivered_date(line)
     return True
 
 
@@ -516,6 +537,9 @@ def _build_overview(po: PurchaseOrder) -> dict:
             "delivered_qty": line.delivered_qty,
             "remaining_qty": line.remaining_qty,
             "is_fully_delivered": line.delivered_qty >= line.quantity,
+            "delivered_date": (
+                line.delivered_date.isoformat() if line.delivered_date else None
+            ),
             "event_count": len(events_out),
             "events": events_out,
         })
