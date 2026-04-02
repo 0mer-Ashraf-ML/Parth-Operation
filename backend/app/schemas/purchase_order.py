@@ -140,6 +140,10 @@ class POListOut(BaseModel):
     ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    ship_date: Optional[date] = Field(
+        None,
+        description="Actual ship / completion date (auto-set when PO becomes COMPLETED)",
+    )
     line_count: int = 0
     total_quantity: int = 0
     total_delivered: int = 0
@@ -164,6 +168,10 @@ class PODetailOut(BaseModel):
     ship_to_contact_name: Optional[str] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    ship_date: Optional[date] = Field(
+        None,
+        description="Actual ship / completion date (auto-set when PO becomes COMPLETED)",
+    )
     total_quantity: int = 0
     total_delivered: int = 0
     total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
