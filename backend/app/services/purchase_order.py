@@ -39,6 +39,7 @@ from app.services.permissions import PermissionService
 from app.services.fulfillment import (
     _adjust_inventory,
     fix_fully_received_po_line_status,
+    stamp_po_line_delivered_date,
     sum_fulfillment_qty_for_line,
     sync_po_line_status_from_delivered_qty,
 )
@@ -82,7 +83,11 @@ def reconcile_fully_received_po_line_statuses(db: Session, po: PurchaseOrder) ->
                 text(
                     """
                     UPDATE po_lines
-                    SET status = 'DELIVERED'::po_line_status
+                    SET status = 'DELIVERED'::po_line_status,
+                        delivered_date = COALESCE(
+                            delivered_date,
+                            (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date
+                        )
                     WHERE purchase_order_id = :po_id
                       AND quantity > 0
                       AND delivered_qty >= quantity
@@ -117,6 +122,16 @@ def reconcile_fully_received_po_line_statuses(db: Session, po: PurchaseOrder) ->
             .values(status=POLineStatus.DELIVERED)
         )
         db.execute(stmt)
+        today = datetime.now(timezone.utc).date()
+        db.execute(
+            update(POLine)
+            .where(
+                POLine.purchase_order_id == po_id,
+                POLine.status == POLineStatus.DELIVERED,
+                POLine.delivered_date.is_(None),
+            )
+            .values(delivered_date=today)
+        )
 
     db.commit()
     db.expire_all()
@@ -459,6 +474,9 @@ def update_purchase_order(
     • expected_ship_date / expected_arrival_date – free update.
     • status=COMPLETED  – marks the PO complete: every line gets delivered_qty
       set to full quantity, status DELIVERED, remaining 0 (inventory adjusted).
+      Each line gets delivered_date set once (UTC date) if still null; existing
+      dates are left unchanged. If the PO is already COMPLETED, the same PATCH
+      backfills missing ship_date and missing per-line delivered_date only.
     """
     po = get_purchase_order(db, current_user, po_id)
 
@@ -504,6 +522,7 @@ def update_purchase_order(
 
                 line.delivered_qty = line.quantity
                 line.status = POLineStatus.DELIVERED
+                stamp_po_line_delivered_date(line)
 
             # ── Persist snapshot on the PO ────────────────────
             po.pre_completion_snapshot = {
@@ -514,10 +533,19 @@ def update_purchase_order(
             db.flush()
             derive_and_persist_po_status(db, po)
             derive_and_persist_so_status(db, po.sales_order_id)
-        elif po.ship_date is None:
-            # PATCH status=COMPLETED while header already COMPLETED (e.g. lines were
-            # closed earlier); still stamp ship_date if missing.
-            _stamp_ship_date_on_po_completion(po)
+        else:
+            # Idempotent PATCH status=COMPLETED: backfill header ship_date and any
+            # line delivered_date that was never stamped (do not overwrite existing).
+            if po.ship_date is None:
+                _stamp_ship_date_on_po_completion(po)
+            po = db.execute(
+                select(PurchaseOrder)
+                .options(selectinload(PurchaseOrder.lines))
+                .where(PurchaseOrder.id == po_id)
+            ).scalar_one()
+            for line in po.lines or []:
+                stamp_po_line_delivered_date(line)
+            db.flush()
 
     # ── Vendor reassignment (auto-updates line costs) ──────
     if "vendor_id" in kwargs and kwargs["vendor_id"] is not None:
@@ -784,6 +812,7 @@ def update_po_line(
         line.expected_arrival_date = kwargs["expected_arrival_date"]
 
     fix_fully_received_po_line_status(line, po.shipment_type)
+    stamp_po_line_delivered_date(line)
 
     # ── Auto-derive PO header status ──────────────────────
     db.flush()

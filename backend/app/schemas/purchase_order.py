@@ -49,6 +49,10 @@ class POLineOut(BaseModel):
     due_date: Optional[date] = None
     expected_ship_date: Optional[date] = None
     expected_arrival_date: Optional[date] = None
+    delivered_date: Optional[date] = Field(
+        None,
+        description="Date the line first reached DELIVERED (UTC, auto-set)",
+    )
     created_at: datetime
     # Denormalized for readability
     sku_code: Optional[str] = None

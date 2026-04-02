@@ -332,6 +332,7 @@ def _line_to_out(line) -> dict:
         due_date=line.due_date,
         expected_ship_date=line.expected_ship_date,
         expected_arrival_date=line.expected_arrival_date,
+        delivered_date=line.delivered_date,
         created_at=line.created_at,
         sku_code=line.sku.sku_code if line.sku else None,
         sku_name=line.sku.name if line.sku else None,

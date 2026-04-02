@@ -12,7 +12,7 @@ Fulfillment events are APPEND-ONLY – there is no Update or Delete schema.
 Once a delivery event is recorded, it can never be modified or removed.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -86,6 +86,7 @@ class POLineFulfillmentSummary(BaseModel):
     delivered_qty: int
     remaining_qty: int
     is_fully_delivered: bool
+    delivered_date: Optional[date] = None
     event_count: int
     events: list[FulfillmentEventOut] = []
 
