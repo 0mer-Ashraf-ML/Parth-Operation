@@ -30,17 +30,14 @@ def list_vendors(
     db: Session,
     current_user: CurrentUser,
     *,
-    is_active: bool | None = True,  # default: only active vendors shown in dropdowns
+    is_active: bool | None = None,
     search: str | None = None,
 ) -> list[Vendor]:
     """
     Return vendors visible to the current user.
 
-    • Admin / AM → all vendors (default: active only; pass is_active=None for all).
+    • Admin / AM → all vendors (default: none; for dropdowns).
     • Vendor     → only their own vendor record.
-
-    Default is_active=True ensures inactive vendors never appear in dropdowns.
-    Pass is_active=None explicitly to list all (e.g. Admin management page).
     """
     query = select(Vendor).options(selectinload(Vendor.addresses))
 

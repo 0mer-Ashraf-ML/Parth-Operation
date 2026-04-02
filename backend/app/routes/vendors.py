@@ -44,13 +44,7 @@ router = APIRouter(prefix="/vendors", tags=["Vendors"])
     summary="List vendors",
 )
 def list_vendors(
-    is_active: bool | None = Query(
-        True,
-        description=(
-            "Filter by active status. "
-            "Default=true (only active vendors — safe for dropdowns). "
-            "Pass false for inactive only, or omit the param to get all."
-        ),
+    is_active: bool | None = Query(None, description=("Filter by active status"),
     ),
     search: str | None = Query(None, description="Search by company name"),
     current_user: CurrentUser = Depends(require_any_role),

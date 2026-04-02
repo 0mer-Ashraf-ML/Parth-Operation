@@ -493,6 +493,18 @@ def update_purchase_order(
                 .options(selectinload(PurchaseOrder.lines))
                 .where(PurchaseOrder.id == po_id)
             ).scalar_one()
+
+            # ── Build snapshot BEFORE mutating anything ───────
+            snapshot_lines = []
+            snapshot_inv_deltas = []
+            for line in po.lines or []:
+                snapshot_lines.append({
+                    "id": line.id,
+                    "status": line.status.value,
+                    "delivered_qty": line.delivered_qty,
+                })
+
+            # ── Apply completion: force every line to DELIVERED ─
             for line in po.lines or []:
                 old_st = line.status
                 old_d = line.delivered_qty
@@ -502,12 +514,22 @@ def update_purchase_order(
                         remaining = line.quantity - old_d
                         if remaining > 0:
                             _adjust_inventory(db, line.sku_id, -remaining)
-                    elif old_st not in (POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED):
-                        pass
+                            # Record the delta so reopen can reverse it
+                            snapshot_inv_deltas.append({
+                                "sku_id": line.sku_id,
+                                "delta": -remaining,
+                            })
 
                 line.delivered_qty = line.quantity
                 line.status = POLineStatus.DELIVERED
                 stamp_po_line_delivered_date(line)
+
+            # ── Persist snapshot on the PO ────────────────────
+            po.pre_completion_snapshot = {
+                "lines": snapshot_lines,
+                "inventory_deltas": snapshot_inv_deltas,
+            }
+
             db.flush()
             derive_and_persist_po_status(db, po)
             derive_and_persist_so_status(db, po.sales_order_id)
@@ -595,6 +617,85 @@ def update_purchase_order(
 
     db.commit()
     db.refresh(po)
+    return po
+
+
+def reopen_purchase_order(
+    db: Session,
+    current_user: CurrentUser,
+    po_id: int,
+) -> PurchaseOrder:
+    """
+    Reopen a COMPLETED PO, restoring all lines to their exact state
+    just before the PO was marked complete.
+
+    Steps:
+      1. Verify PO is COMPLETED and has a snapshot.
+      2. Restore each line's status and delivered_qty from the snapshot.
+      3. Reverse any inventory adjustments made during completion.
+      4. Reset PO header to STARTED, clear ship_date and snapshot.
+      5. Re-derive parent SO status.
+
+    Only ADMIN can reopen a completed PO.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise ForbiddenException("Only an Admin can reopen a completed PO.")
+
+    po = db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.lines))
+        .where(PurchaseOrder.id == po_id)
+    ).scalar_one_or_none()
+
+    if po is None:
+        raise NotFoundException(f"Purchase Order with id={po_id} not found")
+
+    _assert_can_access_po(current_user, po)
+
+    if po.status != POStatus.COMPLETED:
+        raise BadRequestException(
+            f"PO '{po.po_number}' is not COMPLETED (current status: {po.status.value}). "
+            "Only COMPLETED POs can be reopened."
+        )
+
+    snapshot = po.pre_completion_snapshot
+    if not snapshot:
+        raise BadRequestException(
+            f"PO '{po.po_number}' has no completion snapshot and cannot be automatically "
+            "reopened. Please adjust line statuses manually via the line update endpoint."
+        )
+
+    # ── Restore per-line state ────────────────────────────
+    lines_by_id = {ln.id: ln for ln in (po.lines or [])}
+    for ls in snapshot.get("lines", []):
+        line = lines_by_id.get(ls["id"])
+        if line is None:
+            continue
+        # Restore status — stored as .value (e.g. "in_production")
+        try:
+            line.status = POLineStatus(ls["status"])
+        except ValueError:
+            # Fallback: try by name (legacy snapshots)
+            line.status = POLineStatus[ls["status"].upper()]
+        line.delivered_qty = ls["delivered_qty"]
+
+    # ── Reverse inventory deltas made during completion ───
+    for inv in snapshot.get("inventory_deltas", []):
+        # delta was negative (subtracted on complete) → reverse = add back
+        _adjust_inventory(db, inv["sku_id"], -inv["delta"])
+
+    # ── Reset PO header ───────────────────────────────────
+    po.status = POStatus.STARTED
+    po.ship_date = None
+    po.pre_completion_snapshot = None
+
+    db.flush()
+    derive_and_persist_so_status(db, po.sales_order_id)
+    db.commit()
+
+    po = db.execute(
+        _select_po_detail(po_id)
+    ).scalar_one()
     return po
 
 
