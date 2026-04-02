@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models.chat import Conversation, Message
-from app.models.enums import MessageRole, POLineStatus, EventSource
+from app.models.enums import MessageRole, POLineStatus, EventSource, ShipmentType
 from app.schemas.auth import CurrentUser
 from app.schemas.sales_order import SOCreate
 from app.schemas.fulfillment import FulfillmentEventCreate
@@ -151,18 +151,57 @@ async def process_chat_stream(
         except Exception as e:
             return f"Error: {e}"
 
-    def generate_purchase_orders(so_id: int, confirmed: bool = False):
+    def generate_purchase_orders(so_id: int, shipment_type: str = None, confirmed: bool = False):
         """
         Tool 5: Auto-create one PO per vendor from a Sales Order.
-        IMPORTANT: so_id is the DATABASE INTEGER ID (e.g. 186), NOT the order number string.
-        Always call find_sales_order first to get the database id, then pass that id here.
-        Requires confirmation: call with confirmed=False first, then confirmed=True after user says yes.
+
+        IMPORTANT:
+        - so_id is the DATABASE INTEGER ID (e.g. 186), NOT the order number string.
+          Always call find_sales_order first to get the database id.
+        - shipment_type MUST be provided by the user before confirming.
+          Valid values: "drop_ship" or "in_house"
+          - drop_ship:  Vendor ships goods directly to the customer.
+          - in_house:   Vendor ships goods to Parth's warehouse first.
+        - If shipment_type is not provided yet, ask the user BEFORE calling with confirmed=False.
+        - Requires confirmation: call with confirmed=False first to show a summary,
+          then call with confirmed=True after user says yes.
         """
+        if not shipment_type:
+            return (
+                "STATUS: NEEDS_INFO. "
+                "Please ask the user: 'Should this order be shipped directly to the customer "
+                "(Drop-Ship) or delivered to our warehouse first (In-House)?' "
+                "Wait for the user's answer, then call this tool again with the correct shipment_type."
+            )
+
+        # Normalise input — accept "drop_ship", "drop-ship", "dropship", "in_house", "inhouse" etc.
+        normalised = shipment_type.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalised in ("drop_ship", "dropship", "drop"):
+            resolved_type = ShipmentType.DROP_SHIP
+            type_label = "Drop-Ship (direct to customer)"
+        elif normalised in ("in_house", "inhouse", "in_house", "house"):
+            resolved_type = ShipmentType.IN_HOUSE
+            type_label = "In-House (to warehouse first)"
+        else:
+            return (
+                f"Invalid shipment_type '{shipment_type}'. "
+                "Please ask the user again: drop_ship or in_house?"
+            )
+
         if not confirmed:
-            return "STATUS: REQUIRES_CONFIRMATION. Ask the user if they want to generate Purchase Orders for this Sales Order."
+            return (
+                f"STATUS: REQUIRES_CONFIRMATION. "
+                f"Will generate Purchase Orders for SO (id={so_id}) "
+                f"with shipment type: {type_label}. "
+                f"Ask the user to confirm."
+            )
         try:
-            pos = generate_pos_from_so(db, current_user, so_id)
-            return to_json_dict({"success": True, "pos_generated": [p.po_number for p in pos]})
+            pos = generate_pos_from_so(db, current_user, so_id, shipment_type=resolved_type)
+            return to_json_dict({
+                "success": True,
+                "shipment_type": type_label,
+                "pos_generated": [p.po_number for p in pos],
+            })
         except Exception as e:
             return f"Error: {e}"
 
@@ -488,6 +527,22 @@ async def process_chat_stream(
     - Do NOT ask the user for any missing info; derive everything from the PDF data.
     - If a SKU code is missing from the PDF, generate one from the product description (e.g. first letters, max 20 chars).
     - If billing and ship-to addresses are the same in the PDF, use the same values for both.
+
+    GENERATE PURCHASE ORDERS FLOW (MANDATORY — never skip any step):
+      Step 1: Resolve the SO integer id via find_sales_order if not already known.
+      Step 2: ALWAYS ask the user for shipment type BEFORE anything else:
+              "Should these Purchase Orders be Drop-Ship (vendor ships directly to the customer)
+               or In-House (vendor ships to our warehouse first)?"
+              Do NOT call generate_purchase_orders until the user has answered this question.
+      Step 3: Once the user answers, call generate_purchase_orders(so_id=X, shipment_type="drop_ship"|"in_house", confirmed=False)
+              to show a confirmation summary.
+      Step 4: After user confirms (Yes/go ahead), call again with confirmed=True to create the POs.
+
+    SHIPMENT TYPE RULES:
+    - drop_ship → Vendor ships goods DIRECTLY to the end customer. No warehouse step.
+    - in_house  → Vendor ships goods to OUR warehouse first. Flow includes READY_FOR_PICKUP step.
+    - Once any PO line reaches READY_FOR_PICKUP or DELIVERED, shipment type CANNOT be changed.
+    - If the user asks to change shipment type on an active PO, warn them of the restriction.
 
     OTHER WRITE ACTIONS (non-PDF):
     - Call the write tool with confirmed=False first. The tool returns REQUIRES_CONFIRMATION.
