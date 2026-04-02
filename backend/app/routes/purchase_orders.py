@@ -148,6 +148,30 @@ def update_purchase_order(
     }
 
 
+@router.post(
+    "/{po_id}/reopen",
+    summary="Reopen a COMPLETED PO (Admin only)",
+    response_description=(
+        "Full PO detail with all lines restored to their pre-completion state. "
+        "Inventory adjustments made during completion are automatically reversed."
+    ),
+)
+def reopen_purchase_order(
+    po_id: int,
+    current_user: CurrentUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    po = po_svc.reopen_purchase_order(db, current_user, po_id)
+    return {
+        "success": True,
+        "data": {
+            "message": f"Purchase Order '{po.po_number}' has been reopened successfully. "
+                       "All lines have been restored to their pre-completion status.",
+            "purchase_order": _po_to_detail(po),
+        },
+    }
+
+
 @router.delete(
     "/{po_id}",
     summary="Delete a PO (only if STARTED)",

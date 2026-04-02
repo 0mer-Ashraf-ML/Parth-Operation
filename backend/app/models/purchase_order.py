@@ -45,12 +45,14 @@ from sqlalchemy import (
     Enum as SAEnum,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     func,
 )
 # Note: Numeric is used for unit_cost (Decimal column).
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Any
 
 from app.models.base import Base, TimestampMixin
 from app.models.enums import POLineStatus, POStatus, ShipmentType
@@ -99,6 +101,16 @@ class PurchaseOrder(Base, TimestampMixin):
         Date,
         nullable=True,
         comment="Auto-set when PO status becomes COMPLETED (UTC calendar date)",
+    )
+    pre_completion_snapshot: Mapped[Optional[Any]] = mapped_column(
+        JSON,
+        nullable=True,
+        comment=(
+            "Snapshot of line states + inventory deltas saved just before a PO is "
+            "marked COMPLETED. Used to restore all lines when the PO is reopened. "
+            "Format: {lines: [{id, status, delivered_qty}], "
+            "inventory_deltas: [{sku_id, delta}]}"
+        ),
     )
 
     # ── Relationships ──────────────────────────────────────
