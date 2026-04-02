@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.dependencies import require_admin, require_admin_or_am, require_any_role
-from app.models.enums import POStatus, ShipmentType
+from app.models.enums import POLineStatus, POStatus, ShipmentType
 from app.models.purchase_order import POLine
 from app.schemas.auth import CurrentUser
 from app.schemas.client import ClientAddressOut
@@ -203,6 +203,16 @@ def _so_ship_to_fields(po) -> tuple[Optional[ClientAddressOut], Optional[str]]:
     return addr, contact
 
 
+def _can_change_shipment_type(po) -> bool:
+    """True when no line has reached READY_FOR_PICKUP or DELIVERED."""
+    blocked = {POLineStatus.READY_FOR_PICKUP, POLineStatus.DELIVERED}
+    if po.status == POStatus.COMPLETED:
+        return False
+    if po.lines:
+        return not any(ln.status in blocked for ln in po.lines)
+    return True
+
+
 def _po_to_list_item(po) -> dict:
     """Build lightweight list-item representation of a PO."""
     line_count = len(po.lines) if po.lines else 0
@@ -233,6 +243,7 @@ def _po_to_list_item(po) -> dict:
         total_quantity=total_quantity,
         total_delivered=total_delivered,
         total_cost=total_cost,
+        can_change_shipment_type=_can_change_shipment_type(po),
         created_at=po.created_at,
     ).model_dump()
 
@@ -268,6 +279,7 @@ def _po_to_detail(po) -> dict:
         total_delivered=total_delivered,
         total_cost=total_cost,
         is_deletable=is_deletable,
+        can_change_shipment_type=_can_change_shipment_type(po),
         created_at=po.created_at,
         updated_at=po.updated_at,
         lines=lines,

@@ -148,6 +148,7 @@ class POListOut(BaseModel):
     total_quantity: int = 0
     total_delivered: int = 0
     total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
+    can_change_shipment_type: bool = True  # False once any line is READY_FOR_PICKUP or DELIVERED
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -176,6 +177,7 @@ class PODetailOut(BaseModel):
     total_delivered: int = 0
     total_cost: Optional[Decimal] = None  # sum of (unit_cost × quantity) across lines
     is_deletable: bool = False
+    can_change_shipment_type: bool = True  # False once any line is READY_FOR_PICKUP or DELIVERED
     created_at: datetime
     updated_at: datetime
     lines: list[POLineOut] = []
