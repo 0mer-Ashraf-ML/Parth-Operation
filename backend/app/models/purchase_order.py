@@ -19,7 +19,8 @@ PO header status is AUTO-DERIVED from line items:
 All shipment/delivery tracking lives here – NOT on the Sales Order.
   • expected_ship_date    – when vendor expects to ship goods
   • expected_arrival_date – when goods arrive at warehouse or client (drop-ship)
-Both are updated by the vendor so the business always knows the schedule.
+  • ship_date             – auto-set when status becomes COMPLETED (actual ship / close date)
+Both schedule fields are updated by the vendor; ship_date is system-set on completion.
 
 POLine
 ──────
@@ -93,6 +94,11 @@ class PurchaseOrder(Base, TimestampMixin):
     expected_arrival_date: Mapped[Optional[_dt.date]] = mapped_column(
         Date, nullable=True,
         comment="When goods are expected to arrive at warehouse or client (updated by vendor)",
+    )
+    ship_date: Mapped[Optional[_dt.date]] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Auto-set when PO status becomes COMPLETED (UTC calendar date)",
     )
 
     # ── Relationships ──────────────────────────────────────
