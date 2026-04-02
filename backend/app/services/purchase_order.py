@@ -16,6 +16,7 @@ Key business rules:
 """
 
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, selectinload
@@ -54,7 +55,6 @@ def reconcile_fully_received_po_line_statuses(db: Session, po: PurchaseOrder) ->
     """Align line status when delivered_qty >= quantity (in-house vs drop-ship)."""
     bind = db.get_bind()
     po_id = po.id
-    print(f"po_id: {po_id}")
 
     # PostgreSQL: use explicit ::po_line_status casts. Core update().values(status=...)
     # can bind str-Enum *values* (e.g. ready_for_pickup) while the DB type labels are
@@ -150,15 +150,27 @@ def derive_po_status(po: PurchaseOrder) -> POStatus:
     return POStatus.COMPLETED if all_delivered else POStatus.STARTED
 
 
+def _stamp_ship_date_on_po_completion(po: PurchaseOrder) -> None:
+    """Set ship_date once when the PO first reaches COMPLETED (UTC calendar date)."""
+    if po.ship_date is not None:
+        return
+    po.ship_date = datetime.now(timezone.utc).date()
+
+
 def derive_and_persist_po_status(db: Session, po: PurchaseOrder) -> bool:
     """
     Derive PO status and persist if changed. Returns True if status changed.
+
+    When derived status is COMPLETED, sets ship_date if not already set (including
+    idempotent cases: header already COMPLETED but ship_date was never stamped).
     """
     new_status = derive_po_status(po)
-    if new_status != po.status:
+    status_changed = new_status != po.status
+    if status_changed:
         po.status = new_status
-        return True
-    return False
+    if new_status == POStatus.COMPLETED:
+        _stamp_ship_date_on_po_completion(po)
+    return status_changed
 
 
 def derive_so_status(db: Session, so_id: int) -> SOStatus:
@@ -480,6 +492,10 @@ def update_purchase_order(
             db.flush()
             derive_and_persist_po_status(db, po)
             derive_and_persist_so_status(db, po.sales_order_id)
+        elif po.ship_date is None:
+            # PATCH status=COMPLETED while header already COMPLETED (e.g. lines were
+            # closed earlier); still stamp ship_date if missing.
+            _stamp_ship_date_on_po_completion(po)
 
     # ── Vendor reassignment (auto-updates line costs) ──────
     if "vendor_id" in kwargs and kwargs["vendor_id"] is not None:
